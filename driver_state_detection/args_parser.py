@@ -20,6 +20,23 @@ def get_args():
         help="Path to the camera parameters file (JSON or YAML).",
     )
 
+    # optional input video file (when provided, video is used instead of camera)
+    parser.add_argument(
+        "--video",
+        type=str,
+        default=None,
+        metavar="",
+        help="Path to an input video file. If provided, the video is used instead of the camera.",
+    )
+
+    parser.add_argument(
+        "--video_scale",
+        type=float,
+        default=1.0,
+        metavar="",
+        help="Scale factor (0.1-1.0) to downscale video frames when using --video; values <1.0 reduce resolution and CPU usage.",
+    )
+
     # visualisation parameters
     parser.add_argument(
         "--show_fps",
@@ -55,6 +72,35 @@ def get_args():
         default=False,
         metavar="",
         help="Prints additional info, default is false",
+    )
+
+    # corner evaluation mode: runs a timed sequence where the user looks at each corner
+    parser.add_argument(
+        "--corner_eval",
+        action="store_true",
+        help="Run corner-evaluation routine (top-right, top-left, bottom-left, bottom-right).",
+    )
+    parser.add_argument(
+        "--eval_segment_secs",
+        type=float,
+        default=5.0,
+        metavar="",
+        help="Seconds per corner segment in evaluation (default 10).",
+    )
+    parser.add_argument(
+        "--eval_exclude_secs",
+        type=float,
+        default=1.0,
+        metavar="",
+        help="Seconds to exclude at start and end of each segment when computing accuracy (default 1 -> middle 8s used for 10s segment).",
+    )
+
+    parser.add_argument(
+        "--angles",
+        # type=bool,
+        # default=False,
+        action="store_true",
+        help="returns the right and left eye gaze angles plot and information for duration of the run"
     )
 
     # Attention Scorer parameters (EAR, Gaze Score, Pose)

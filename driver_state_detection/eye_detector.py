@@ -116,21 +116,33 @@ class EyeDetector:
 
         return ear_avg
 
-    @staticmethod
-    def _calc_1eye_score(landmarks, eye_lms_nums, eye_iris_num, frame_size, frame):
+    def get_eye_center(self, landmarks, eye_lms_nums):
+        """Return the normalized (x,y) center of the eye given eye landmark indices.
+
+        landmarks: ndarray (N,...) normalized coordinates
+        eye_lms_nums: iterable of landmark indices for that eye
+        """
+        eye_pts = landmarks[eye_lms_nums, :2]
+        eye_x_min = eye_pts[:, 0].min()
+        eye_y_min = eye_pts[:, 1].min()
+        eye_x_max = eye_pts[:, 0].max()
+        eye_y_max = eye_pts[:, 1].max()
+
+        return np.array(((eye_x_min + eye_x_max) / 2, (eye_y_min + eye_y_max) / 2))
+
+    def _calc_1eye_score(self, landmarks, eye_lms_nums, eye_iris_num, frame_size, frame):
         """Gets each eye score and its picture."""
         iris = landmarks[eye_iris_num, :2]
 
+        eye_center = self.get_eye_center(landmarks, eye_lms_nums)
+
+        eye_gaze_score = LA.norm(iris - eye_center) / (eye_center[0] if eye_center[0] != 0 else 1.0)
+
+        # compute bounding box for cropping the eye image
         eye_x_min = landmarks[eye_lms_nums, 0].min()
         eye_y_min = landmarks[eye_lms_nums, 1].min()
         eye_x_max = landmarks[eye_lms_nums, 0].max()
         eye_y_max = landmarks[eye_lms_nums, 1].max()
-
-        eye_center = np.array(
-            ((eye_x_min + eye_x_max) / 2, (eye_y_min + eye_y_max) / 2)
-        )
-
-        eye_gaze_score = LA.norm(iris - eye_center) / eye_center[0]
 
         eye_x_min_frame = int(eye_x_min * frame_size[0])
         eye_y_min_frame = int(eye_y_min * frame_size[1])
@@ -140,6 +152,54 @@ class EyeDetector:
         eye = frame[eye_y_min_frame:eye_y_max_frame, eye_x_min_frame:eye_x_max_frame]
 
         return eye_gaze_score, eye
+    
+    def get_Gaze_Vector(self, frame, landmarks, frame_size):
+        """
+        Computes vector that shows the direction of the gaze
+        This function calculates the gaze point for each eye and draws the gaze vector from the iris to the gaze point
+        """
+
+        # Use helper to compute per-eye gaze
+        def _compute_eye_gaze(frame, landmarks, eye_lms_nums, iris_num, frame_size):
+            """
+            Compute gaze and draw arrow for a single eye
+            """
+            iris = landmarks[iris_num, :2]
+            # use iris as the primary origin for accuracy (iris is closer to optical axis)
+            eye_center = self.get_eye_center(landmarks, eye_lms_nums)
+            gaze_vector = iris - eye_center
+
+            # convert to pixels
+            scale_px = np.array([frame_size[0], frame_size[1]])
+            iris_px = (iris * scale_px).astype(np.int32)
+
+            gaze_point = iris + gaze_vector * 20
+            gaze_point_px = (gaze_point * scale_px).astype(np.int32)
+
+            end = (int(gaze_point_px[0]), int(gaze_point_px[1]))
+            start = (int(iris_px[0]), int(iris_px[1]))
+
+            # drawing
+            if frame is not None:
+                try:
+                    cv2.arrowedLine(frame, start, end, (0,255,0), 2, tipLength=0.2)
+                except Exception:
+                    pass
+            # return gaze point and iris position 
+            return gaze_point, iris
+
+        left_gaze_point, left_iris = _compute_eye_gaze(
+            frame, landmarks, self.EYES_LMS_NUMS[0:6], self.LEFT_IRIS_NUM, frame_size
+        )
+        right_gaze_point, right_iris = _compute_eye_gaze(
+            frame, landmarks, self.EYES_LMS_NUMS[6:], self.RIGHT_IRIS_NUM, frame_size
+        )
+
+        gaze_point = np.array([left_gaze_point, right_gaze_point])
+        iris_points = np.array([left_iris, right_iris])
+
+        # return gaze points and iris positions (both normalized x,y)
+        return gaze_point, iris_points
 
     def get_Gaze_Score(self, frame, landmarks, frame_size):
         """
