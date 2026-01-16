@@ -9,9 +9,10 @@ def get_args():
         "-c",
         "--camera",
         type=int,
-        default=0,
+        nargs='+',
+        default=[0],
         metavar="",
-        help="Camera number, default is 0 (webcam)",
+        help="Camera number(s). Provide one or more camera indices (e.g. -c 0 1). Default is 0.",
     )
 
     parser.add_argument(
