@@ -184,7 +184,7 @@ class EyeDetector:
             gaze_magnitude = np.sqrt(gaze_vector[0]**2 + gaze_vector[1]**2)
             # print(f"Gaze magnitude: {gaze_magnitude}") # 2 array per eye
 
-            gaze_point = iris_px + gaze_vector * gaze_magnitude *10
+            gaze_point = iris_px + gaze_vector * gaze_magnitude *10 
             # gaze_point_px = (gaze_point * scale_px).astype(np.int32)
 
             end = (int(gaze_point[0]), int(gaze_point[1]))

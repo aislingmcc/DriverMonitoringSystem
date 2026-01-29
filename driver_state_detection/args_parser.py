@@ -104,6 +104,21 @@ def get_args():
         help="returns the right and left eye gaze angles plot and information for duration of the run"
     )
 
+    parser.add_argument(
+        "--scatter",
+        action="store_true",
+        help="returns a scatter plot of gaze points (x, y coordinates) for duration of the run"
+    )
+
+    parser.add_argument(
+        "--roi_classifier",
+        type=str,
+        default="proximity",
+        choices=["proximity", "point_proximity"],
+        metavar="",
+        help="ROI classification method: 'proximity' uses angle+magnitude (default), 'point_proximity' uses gaze point centroid with Euclidean distance"
+    )
+
     # Attention Scorer parameters (EAR, Gaze Score, Pose)
     parser.add_argument(
         "--smooth_factor",
@@ -167,6 +182,35 @@ def get_args():
         default=2.5,
         metavar="",
         help="Sets the Pose time threshold (seconds) for the Attention Scorer, default is 2.5 seconds",
+    )
+
+    # Calibration mode: user looks at each ROI for N seconds; system records mean angles/magnitudes
+    parser.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="Run calibration mode: look at each of the 8 ROIs for 5 seconds each to collect gaze signatures.",
+    )
+    parser.add_argument(
+        "--calibration_duration",
+        type=float,
+        default=4,
+        metavar="",
+        help="Duration (seconds) to look at each ROI during calibration (default 4.1).",
+    )
+    parser.add_argument(
+        "--calibration_output",
+        type=str,
+        nargs='+',
+        default=None,
+        metavar="",
+        help="Optional file path(s) to save/load calibration data as JSON. Provide one file per camera (e.g., cal1.json cal2.json).",
+    )
+    parser.add_argument(
+        "--calibration_audio",
+        type=str,
+        default=None,
+        metavar="",
+        help="Optional audio file path (.wav, .mp3, .m4a) with ROI instructions to play during calibration.",
     )
 
     # parse the arguments and store them in the args variable dictionary
