@@ -13,7 +13,7 @@ from args_parser import get_args
 from pose_estimation import HeadPoseEstimator as HeadPoseEst
 from utils import get_landmarks, load_camera_parameters
 import matplotlib.pyplot as plt
-from gaze_utils import GazeProcessor, GazeLogger, MultiCameraROIClassifier
+from gaze_utils import GazeProcessor, GazeLogger, MultiCameraROIClassifier, CameraPrioritySelector
 from calibration import CalibrationManager
 
 
@@ -277,7 +277,7 @@ def main():
         evaluators = [None] * len(caps)
 
     # Create gaze loggers
-    gaze_loggers = [GazeLogger(enabled=getattr(args, "angles", False), scatter=getattr(args, "scatter", False)) for _ in caps]
+    gaze_loggers = [GazeLogger(angles=getattr(args, "angles", False), scatter=getattr(args, "scatter", False)) for _ in caps]
 
     # Create AttentionScorer instances
     scorers = []
@@ -328,7 +328,9 @@ def main():
 
     # Initialize multi-camera ROI classifier
     multicam_roi_classifier = MultiCameraROIClassifier(calibrated_rois_list=calibrated_rois_list)
+    camera_priority_selector = CameraPrioritySelector(priority_threshold=20)#0.2
     gaze_results_current = [None] * len(caps)
+    head_poses_current = [None] * len(caps)
     prev_fusion_roi = None
 
     # Processing loop (single pass with one frame delayed fusion)
@@ -386,6 +388,7 @@ def main():
             gaze_result = None
             iris_points = None
             gaze_magnitude = None
+            head_poses_current[i] = None
 
             if lms:
                 landmarks = get_landmarks(lms)
@@ -397,6 +400,9 @@ def main():
                 gaze = eye_dets[i].get_Gaze_Score(frame=frame, landmarks=landmarks, frame_size=frame_size)
 
                 gaze_points, iris_points, gaze_magnitude = eye_dets[i].get_Gaze_Vector(frame=frame, landmarks=landmarks, frame_size=frame_size)
+                
+                # Store head pose for priority selection
+                head_poses_current[i] = (roll, pitch, yaw) if roll is not None else None
                 
                 # Compute gaze result for current frame
                 if gaze_points is not None and iris_points is not None:
@@ -414,12 +420,6 @@ def main():
             if gaze_result is not None and iris_points is not None:
                 # Draw gaze vectors
                 gp_adj = gaze_result["gaze_points_adj"]
-                # start1 = (int(iris_points[0][0]), int(iris_points[0][1]))
-                # end1 = (int(gp_adj[0][0]), int(gp_adj[0][1]))
-                # cv2.arrowedLine(frame, start1, end1, (255, 255, 0), 2, tipLength=0.2)
-                # start2 = (int(iris_points[1][0]), int(iris_points[1][1]))
-                # end2 = (int(gp_adj[1][0]), int(gp_adj[1][1]))
-                # cv2.arrowedLine(frame, start2, end2, (255, 255, 0), 2, tipLength=0.2)
 
                 corner_name = gaze_result["corner_name"]
                 mid_ang = gaze_result["mid_ang"]
@@ -447,10 +447,10 @@ def main():
                 right_mag = gaze_magnitude[1]
                 gp_adj = gaze_result["gaze_points_adj"]
 
-                if gaze_logger.enabled or gaze_logger.scatter:
+                if gaze_logger.angles or gaze_logger.scatter:
                     elapsed = time.time() - start_time
                     gaze_logger.log(left_ang, right_ang, mid_ang, left_mag, right_mag, elapsed, gaze_points_adj=gp_adj)
-                    if gaze_logger.enabled:
+                    if gaze_logger.angles:
                         cv2.putText(frame, f"L:{left_ang:.1f}  R:{right_ang:.1f}  M:{mid_ang:.1f}",
                                     (10, 205), cv2.FONT_HERSHEY_PLAIN, 1.3, (180, 255, 180), 2)
 
@@ -517,7 +517,8 @@ def main():
             cv2.imshow(f"Camera {cam_indices[i]} - Press 'q' to terminate", frame)
 
         # compute fusion result
-        fusion_result = multicam_roi_classifier.classify(gaze_results_current)
+        selected_indices = camera_priority_selector.select_cameras(gaze_results_current, head_poses_current)
+        fusion_result = multicam_roi_classifier.classify(gaze_results_current, selected_indices=selected_indices)
         if fusion_result is not None:
             prev_fusion_roi, prev_fusion_score = fusion_result
 
@@ -534,9 +535,9 @@ def main():
     print("Time taken:", end_time - start_time)
     print("FPS:", fps)
 
-    # print the final results
+    # print analysis results
     for i, gl in enumerate(gaze_loggers):
-        if gl is not None and gl.has_samples():
+        if gl is not None and gl.angles:
             gl.print_summary(cam_index=cam_indices[i])
             gl.plot(cam_index=cam_indices[i])
         if gl is not None and gl.scatter and len(gl._gaze_points_x) > 0:

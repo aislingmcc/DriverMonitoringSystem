@@ -13,17 +13,6 @@ def circular_angle_diff(a, b):
     d = abs(a - b) % 360.0
     return min(d, 360.0 - d)
 
-# def circular_std_deg(angles_deg):
-#     if len(angles_deg) == 0:
-#         return 0.0
-#     a = np.deg2rad(np.asarray(angles_deg))
-#     C = np.mean(np.cos(a))
-#     S = np.mean(np.sin(a))
-#     R = np.sqrt(C*C + S*S)
-#     R = np.clip(R, 1e-8, 1.0)
-#     circ_std = np.sqrt(-2.0 * np.log(R))  # radians
-#     return float(np.rad2deg(circ_std))
-
 def vec_jitter_std(vecs):
     if len(vecs) < 2:
         return 0.0
@@ -39,29 +28,8 @@ def select_reliable_eye(left_history, right_history, left_vec, right_vec,
                        iris_points, gp_adj,std_threshold=5.0, ratio_threshold=2.0):
 
     left_std = vec_jitter_std(left_history)
-    #float(np.std(np.asarray(left_history))) if len(left_history) > 0 else 0.0
     right_std = vec_jitter_std(right_history)
-    #float(np.std(np.asarray(right_history))) if len(right_history) > 0 else 0.0
 
-    # Determine which eye is more reliable
-    # if (left_std > right_std * ratio_threshold and left_std > std_threshold):
-    #     # Left eye is unreliable, use right eye
-    #     eye_used = "right"
-    #     gaze_point = gp_adj[1]
-    #     gaze_vec = right_vec
-    #     angle = angle_from_vector(gaze_vec)
-    # elif (right_std > left_std * ratio_threshold and right_std > std_threshold):
-    #     # Right eye is unreliable, use left eye
-    #     eye_used = "left"
-    #     gaze_point = gp_adj[0]
-    #     gaze_vec = left_vec
-    #     angle = angle_from_vector(gaze_vec)
-    # else:
-    #     # Both eyes are reliable, use average
-    #     eye_used = "both"
-    #     gaze_point = np.mean(gp_adj, axis=0)
-    #     mid_vec = np.mean(gp_adj, axis=0) - np.mean(iris_points, axis=0)
-    #     angle = angle_from_vector(mid_vec)
     if left_std > right_std * ratio_threshold and left_std > std_threshold:
         eye_used = "right"
         gaze_vec = right_vec
@@ -258,7 +226,7 @@ def classify_by_proximity_multicam(gaze_data_list, calibrated_rois_list = None, 
     return roi, float(summed_angle_dists[roi])
 
 
-def classify_by_angle(gaze_points: np.ndarray, iris_points: np.ndarray) -> Tuple[str, float]:
+def classify_by_angle(gaze_points, iris_points):
     """
     Classify gaze to one of four corners using midpoint angle for camera test 
     """
@@ -308,8 +276,8 @@ def apply_headpose_adjustment(gaze_points, iris_points, pitch, yaw, yaw_gain=0.0
 class GazeLogger:
     """Simple logger for per-frame gaze angles and timestamps."""
 
-    def __init__(self, enabled: bool = False, scatter: bool = False):
-        self.enabled = bool(enabled)
+    def __init__(self, angles: bool = False, scatter: bool = False):
+        self.angles = bool(angles)
         self.scatter = bool(scatter)
         self._t = []
         self._left = []
@@ -320,11 +288,11 @@ class GazeLogger:
         self._gaze_points_x = []
         self._gaze_points_y = []
 
-    def log(self, left_ang: float, right_ang: float, mid_ang: float, left_mag: float, right_mag: float, wall_time: float, gaze_points_adj: Optional[np.ndarray] = None) -> None:
-        if not self.enabled and not self.scatter:
+    def log(self, left_ang, right_ang, mid_ang, left_mag, right_mag, time, gaze_points_adj = None):
+        if not self.angles and not self.scatter:
             return
-        if self.enabled:
-            self._t.append(wall_time)
+        if self.angles:
+            self._t.append(time)
             self._left.append(left_ang)
             self._right.append(right_ang)
             self._mid.append(mid_ang)
@@ -336,8 +304,8 @@ class GazeLogger:
             self._gaze_points_x.append(gaze_points_adj[0])
             self._gaze_points_y.append(gaze_points_adj[1])
 
-    def has_samples(self) -> bool:
-        return len(self._t) > 0
+    # def has_samples(self) -> bool:
+    #     return len(self._t) > 0
 
     def to_numpy(self):
         t= np.asarray(self._t, dtype=float)
@@ -353,9 +321,9 @@ class GazeLogger:
         return (t, L, R, M)
     
     def print_summary(self, cam_index):
-        if not self.has_samples():
-            print("No gaze samples logged.")
-            return
+        # if not self.has_samples():
+        #     print("No gaze samples logged.")
+        #     return
         t, L, R, M = self.to_numpy()
         print(f"\n=== Gaze Angle Summary (Camera {cam_index}) ===")
         print(f"Samples: {len(t)}")
@@ -367,8 +335,8 @@ class GazeLogger:
         print(f"Gaze Magnitude Right Eye: mean:{np.mean(self._mag_right):.4f}, std:{np.std(self._mag_right):.4f}")
 
     def plot(self, cam_index):
-        if not self.has_samples():
-            return
+        # if not self.has_samples():
+        #     return
         t, L, R, M = self.to_numpy()
         plt.figure(figsize=(8, 3))
         plt.plot(t, L, label="Left eye")
@@ -433,9 +401,7 @@ class GazeProcessor:
         left_ang = angle_from_vector(left_vec)
         right_ang = angle_from_vector(right_vec)
 
-        # Maintain a short history of angles for each eye 
-        # self.left_history.append(left_ang)
-        # self.right_history.append(right_ang)
+        # Maintain a short history for each eye 
         self.left_history.append(left_vec)
         self.right_history.append(right_vec)
         if len(self.left_history) > self.history_points:
@@ -463,7 +429,7 @@ class GazeProcessor:
             roi, _ = classify_by_proximity(mid_ang, gaze_magnitude, calibrated_rois=self.calibrated_rois)
 
         return {
-            "gaze_points_adj": mid_pt,#gp_adj,
+            "gaze_points_adj": mid_pt,
             "left_vec": left_vec,
             "right_vec": right_vec,
             "left_ang": left_ang,
@@ -475,40 +441,72 @@ class GazeProcessor:
         }
 
 
-class MultiCameraROIClassifier:
+class CameraPrioritySelector:
     """
-    Manages ROI classification across multiple cameras using combined metrics.
-    Supports camera-specific ROI configurations and prioritizes single camera if only one is active.
+    Prioritizes cameras with better frontal views 
     """
 
-    def __init__(
-        self,
-        calibrated_rois_list= None,
-        angle_close_thresh = 5.0,
-    ):
-        """
-        Initialize multi-camera ROI classifier.
-        
-        Args:
-            calibrated_rois_list: Optional list of per-camera calibrated ROI configs
-            angle_close_thresh: Threshold for angle proximity filtering
-        """
+    def __init__(self, priority_threshold=0.2):
+        self.priority_threshold = priority_threshold
+
+    def select_cameras(self, gaze_results_list, head_poses_list):
+        if len(gaze_results_list) <= 1:
+            return [i for i, r in enumerate(gaze_results_list) if r is not None]
+
+        scores = []
+        for i, (gaze_result, head_pose) in enumerate(zip(gaze_results_list, head_poses_list)):
+            if gaze_result is None or head_pose is None:
+                scores.append(0.0)
+                continue
+            
+            # Head pose: lower values better (frontal view) 
+            roll, pitch, yaw = head_pose
+            pose_score = 1.0 / (1.0 + abs(roll) + abs(pitch) + abs(yaw))  # Higher is better
+            # may need to be adjusted for car setup
+
+            pose_score = 0.7 * pose_score #+ 0.3 
+            scores.append(pose_score)
+
+        # Find valid cameras (those with results)
+        valid_cameras = [i for i, score in enumerate(scores) if score > 0]
+
+        # Sort by score descending
+        sorted_valid = sorted(valid_cameras, key=lambda i: scores[i], reverse=True)
+        best_score = scores[sorted_valid[0]]
+        second_score = scores[sorted_valid[1]] if len(sorted_valid) > 1 else 0
+
+        # Check if significant difference between best and second
+        if best_score > second_score * (1 + self.priority_threshold):
+            print("Camera ", sorted_valid[0], " prioritized for fusion")
+            return [sorted_valid[0]]
+        else:
+            return sorted_valid
+
+
+class MultiCameraROIClassifier:
+    def __init__(self, calibrated_rois_list= None, angle_close_thresh = 5.0):
         self.calibrated_rois_list = calibrated_rois_list
         self.angle_close_thresh = angle_close_thresh
 
-    def classify(self, gaze_results_list: List[Optional[Dict[str, Any]]]):
+    def classify(self, gaze_results_list: List[Optional[Dict[str, Any]]], selected_indices=None):
         """
         Classify ROI using combined multi-camera gaze data.
         
         Args:
             gaze_results_list: List of gaze processing results from each camera
                                (from GazeProcessor.process()), or None if no landmarks
+            selected_indices: Optional list of camera indices to use for fusion
         
-        Returns:
-            (roi_name, combined_score)
+        Returns: (roi_name, combined_score)
         """
+        # Filter to selected cameras if provided
+        if selected_indices is not None:
+            filtered_results = [gaze_results_list[i] if i in selected_indices else None for i in range(len(gaze_results_list))]
+        else:
+            filtered_results = gaze_results_list
+
         # Filter out None results (cameras without landmarks)
-        valid_results = [r for r in gaze_results_list if r is not None]
+        valid_results = [r for r in filtered_results if r is not None]
         
         if not valid_results:
             return "none", 0.0
@@ -516,7 +514,7 @@ class MultiCameraROIClassifier:
         # Build gaze data list for classification
         gaze_data_list = []
         valid_indices = []
-        for idx, result in enumerate(gaze_results_list):
+        for idx, result in enumerate(filtered_results):
             if result is not None:
                 gaze_data_list.append({
                     "mid_ang": result["mid_ang"],
