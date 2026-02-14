@@ -105,6 +105,7 @@ class AttentionScorer:
         self.closed_flags = np.empty((0,), dtype=bool)
         self.eye_closure_counter = 0
         self.prev_time = t_now
+        self.eye_counter = 0
 
     def _update_metric(self, metric_value, condition, elapsed):
         """
@@ -278,7 +279,11 @@ class AttentionScorer:
             The rolling PERCLOS score calculated over the defined time period.
         """
         # Determine if the current frame indicates closed eyes
+        
         eye_closed = (ear_score is not None) and (ear_score <= self.ear_thresh)
+        if eye_closed:
+            self.eye_counter = self.eye_counter + 1
+            print("eyes closed!!!!!: ", self.eye_counter)
 
         # Append new values to the NumPy arrays. (np.concatenate creates new arrays.)
         self.timestamps = np.concatenate((self.timestamps, [t_now]))

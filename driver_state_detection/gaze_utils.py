@@ -372,13 +372,13 @@ class GazeProcessor:
 
     def __init__(
         self,
-        yaw_gain: float = 0.005,
-        pitch_gain: float = 0.005,
-        history_points: int = 20,
-        std_threshold: float = 15.0,
-        ratio_threshold: float = 2.0,
-        calibrated_rois: Optional[Dict[str, Dict[str, float]]] = None,
-        roi_classifier: str = "proximity"):
+        yaw_gain = 0.005,
+        pitch_gain = 0.005,
+        history_points= 20,
+        std_threshold= 15.0,
+        ratio_threshold = 2.0,
+        calibrated_rois= None,
+        roi_classifier = "proximity"):
 
         self.yaw_gain = yaw_gain
         self.pitch_gain = pitch_gain
@@ -419,14 +419,10 @@ class GazeProcessor:
         )
 
         corner_name, _ = classify_by_angle(mid_ang, iris_points)
-        
+
         # Use selected classifier method with the reliable eye data
-        if self.roi_classifier == "point_proximity":
-            # Use point-based classification (Euclidean distance to centroids)
-            roi, _ = classify_by_point_proximity(mid_pt, calibrated_rois=self.calibrated_rois)
-        else:
-            # Default: use proximity method (angle + magnitude)
-            roi, _ = classify_by_proximity(mid_ang, gaze_magnitude, calibrated_rois=self.calibrated_rois)
+        roi, _ = classify_by_point_proximity(mid_pt, calibrated_rois=self.calibrated_rois)
+        roi_cluster, _ = classify_by_proximity(mid_ang, gaze_magnitude, calibrated_rois=self.calibrated_rois)
 
         return {
             "gaze_points_adj": mid_pt,
@@ -437,6 +433,7 @@ class GazeProcessor:
             "mid_ang": mid_ang,
             "corner_name": corner_name,
             "roi": roi,
+            "roi_cluster": roi_cluster, 
             "gaze_magnitude": gaze_magnitude,
         }
 
@@ -488,17 +485,7 @@ class MultiCameraROIClassifier:
         self.calibrated_rois_list = calibrated_rois_list
         self.angle_close_thresh = angle_close_thresh
 
-    def classify(self, gaze_results_list: List[Optional[Dict[str, Any]]], selected_indices=None):
-        """
-        Classify ROI using combined multi-camera gaze data.
-        
-        Args:
-            gaze_results_list: List of gaze processing results from each camera
-                               (from GazeProcessor.process()), or None if no landmarks
-            selected_indices: Optional list of camera indices to use for fusion
-        
-        Returns: (roi_name, combined_score)
-        """
+    def classify(self, gaze_results_list, selected_indices=None):
         # Filter to selected cameras if provided
         if selected_indices is not None:
             filtered_results = [gaze_results_list[i] if i in selected_indices else None for i in range(len(gaze_results_list))]

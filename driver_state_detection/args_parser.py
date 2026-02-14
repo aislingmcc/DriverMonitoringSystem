@@ -213,6 +213,13 @@ def get_args():
         help="Optional audio file path (.wav, .mp3, .m4a) with ROI instructions to play during calibration.",
     )
 
+    # ROI evaluation similar to calibration (transition + recording per ROI)
+    parser.add_argument(
+        "--car_eval",
+        action="store_true",
+        help="Run ROI classification evaluation (transition 2s, record 4s per ROI) to measure classifier accuracy.",
+    )
+
     # parse the arguments and store them in the args variable dictionary
     args, _ = parser.parse_known_args()
 

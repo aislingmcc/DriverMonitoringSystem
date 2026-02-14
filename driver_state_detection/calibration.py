@@ -3,11 +3,11 @@ import cv2
 import numpy as np
 import threading
 import subprocess
-from gaze_utils import select_reliable_eye
+# from gaze_utils import select_reliable_eye
 
-class CalibrationManager:
+class Calibration:
 
-    def __init__(self, roi_duration= 4.0, transition_duration= 2.0, audio_file=None):
+    def __init__(self, roi_duration= 4.0, transition_duration= 2.0, audio_file=None, ear_thresh=0.2):
         self.roi_duration = roi_duration
         self.transition_duration = transition_duration
         self.roi_names = ["left_mirror", "right_mirror", "radio", "road", "lap", "rearmirror","left_window", "right_window"]
@@ -19,10 +19,10 @@ class CalibrationManager:
         self.current_left_mags = []
         self.current_right_mags = []
         self.current_gaze_points = []
-        # self.current_left_history = []
-        # self.current_right_history = []
         self.audio_player = None
         self.audio_file = audio_file
+        self.ear_thresh = ear_thresh
+        self.eye_counter = 0
 
     def start_calibration(self):
         self.roi_index = 0
@@ -36,12 +36,18 @@ class CalibrationManager:
             self.audio_player.play()
 
     def update(self, mid_ang, left_mag, right_mag, gaze_points_adj= None, 
-               left_vec = None, right_vec = None):
+               left_vec = None, right_vec = None, ear_score=None):
         
         """
         Update calibration with gaze info
         """
         elapsed = time.time() - self.segment_start_time
+        
+        # Determine if eyes are closed (blink detected)
+        eye_closed = (ear_score is not None) and (ear_score <= self.ear_thresh)
+        if eye_closed:
+            self.eye_counter = self.eye_counter + 1 
+            print("eyes closed!!!!!: ", self.eye_counter)
 
         # transition period
         if self.in_transition:
@@ -53,12 +59,10 @@ class CalibrationManager:
                 self.current_left_mags = []
                 self.current_right_mags = []
                 self.current_gaze_points = []
-                # self.current_left_history = []
-                # self.current_right_history = []
             return False
 
-        # Only collect data if valid gaze data is available
-        if mid_ang is not None and left_mag is not None and right_mag is not None:
+        # Only collect data if valid gaze data is available AND eyes are open (not blinking)
+        if mid_ang is not None and left_mag is not None and right_mag is not None and not eye_closed:
             # arrays for current ROI 
             self.current_mid_angles.append(mid_ang)
             self.current_left_mags.append(left_mag)
@@ -69,23 +73,22 @@ class CalibrationManager:
         if elapsed >= self.roi_duration:
             roi_name = self.roi_names[self.roi_index]
             
-            if len(self.current_mid_angles) > 0:
-                roi_data = {"angle": float(np.median(self.current_mid_angles)),
-                            "left_mag": float(np.median(self.current_left_mags)),
-                            "right_mag": float(np.median(self.current_right_mags)),
-                            "angle_std": float(np.std(self.current_mid_angles))}
-                
-                # Calculate centroid of gaze points 
-                if len(self.current_gaze_points) >= 1:
-                    gaze_points_array = np.asarray(self.current_gaze_points, dtype=np.float32)
-                    centroid_x = float(np.median(gaze_points_array[:, 0]))
-                    centroid_y = float(np.median(gaze_points_array[:, 1]))
-                    # print(f"Centroid for {roi_name}: ({centroid_x}, {centroid_y})")
-                    roi_data["centroid_x"] = centroid_x
-                    roi_data["centroid_y"] = centroid_y
+            # if len(self.current_mid_angles) > 0:
+            roi_data = {"angle": float(np.median(self.current_mid_angles)) if len(self.current_mid_angles) > 0 else 0.0,
+                        "left_mag": float(np.median(self.current_left_mags)) if len(self.current_left_mags) > 0 else 0.0,
+                        "right_mag": float(np.median(self.current_right_mags)) if len(self.current_right_mags) > 0 else 0.0,
+                        "angle_std": float(np.std(self.current_mid_angles)) if len(self.current_mid_angles) > 0 else 0.0}
+            
+            # Calculate centroid of gaze points 
+            if len(self.current_gaze_points) >= 1:
+                gaze_points_array = np.asarray(self.current_gaze_points, dtype=np.float32)
+                centroid_x = float(np.median(gaze_points_array[:, 0]))
+                centroid_y = float(np.median(gaze_points_array[:, 1]))
+                # print(f"Centroid for {roi_name}: ({centroid_x}, {centroid_y})")
+                roi_data["centroid_x"] = centroid_x
+                roi_data["centroid_y"] = centroid_y
 
-                
-                self.calibration_data[roi_name] = roi_data
+            self.calibration_data[roi_name] = roi_data
 
             # Move on to next ROI
             self.roi_index += 1

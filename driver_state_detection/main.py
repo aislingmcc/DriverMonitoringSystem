@@ -8,13 +8,14 @@ import numpy as np
 
 from attention_scorer import AttentionScorer as AttScorer
 from eye_detector import EyeDetector as EyeDet
-from evaluation import CornerEvaluator
+from evaluation import CornerEvaluator, CarEvaluator#, AudioPlayer
 from args_parser import get_args
 from pose_estimation import HeadPoseEstimator as HeadPoseEst
 from utils import get_landmarks, load_camera_parameters
 import matplotlib.pyplot as plt
 from gaze_utils import GazeProcessor, GazeLogger, MultiCameraROIClassifier, CameraPrioritySelector
-from calibration import CalibrationManager
+from calibration import Calibration
+# from evaluation import CarEvaluator as EvalManager
 
 
 def run_calibration(args, camera_matrix, dist_coeffs):
@@ -40,7 +41,7 @@ def run_calibration(args, camera_matrix, dist_coeffs):
         gaze_procs.append(GazeProcessor())
         
         # Creates calibration manager 
-        calib_mgrs.append(CalibrationManager(roi_duration=args.calibration_duration, transition_duration=2.0, audio_file=audio_file))
+        calib_mgrs.append(Calibration(roi_duration=args.calibration_duration, transition_duration=2.0, audio_file=audio_file, ear_thresh=args.ear_thresh))
         calib_mgrs[i].start_calibration()
 
     all_complete = [False] * len(caps)
@@ -67,6 +68,9 @@ def run_calibration(args, camera_matrix, dist_coeffs):
                 landmarks = get_landmarks(lms)
                 eye_dets[i].show_eye_keypoints(color_frame=frame, landmarks=landmarks, frame_size=frame_size)
 
+                # Get EAR for blink detection
+                ear = eye_dets[i].get_EAR(landmarks=landmarks)
+
                 gaze_points, iris_points, gaze_magnitude = eye_dets[i].get_Gaze_Vector(
                     frame=frame, landmarks=landmarks, frame_size=frame_size
                 )
@@ -85,12 +89,13 @@ def run_calibration(args, camera_matrix, dist_coeffs):
                         right_vec = gaze_result.get("right_vec", None)
 
                         # Update calibration current frame data (pass gaze_points_adj and eye vectors for proper calibration)
+                        # Pass ear_score for blink detection - frames with blinks will be skipped
                         is_complete = calib_mgrs[i].update(mid_ang, left_mag, right_mag, gaze_points_adj=gp_adj, 
-                                                           left_vec=left_vec, right_vec=right_vec)
+                                                           left_vec=left_vec, right_vec=right_vec, ear_score=ear)
 
             else:
                 # No face detected still call update for synchronized time with audio
-                is_complete = calib_mgrs[i].update(None, None, None, gaze_points_adj=None, left_vec=None, right_vec=None)
+                is_complete = calib_mgrs[i].update(None, None, None, gaze_points_adj=None, left_vec=None, right_vec=None, ear_score=None)
 
             if is_complete:
                 all_complete[i] = True
@@ -132,6 +137,9 @@ def run_calibration(args, camera_matrix, dist_coeffs):
                     f"  {roi_name}: angle={data['angle']:.1f}°, "
                     f"left_mag={data['left_mag']:.4f}, right_mag={data['right_mag']:.4f}"
                 )
+                if data['angle_std'] > 30:
+                    print(f" WARNING: High variability of {roi_name} calibration: std={data['angle_std']:.1f}")
+            
             calibrated_rois_list.append(calibrated_rois)
         else:
             print(f"No calibration data collected for camera {cam_indices[i]}.")
@@ -270,11 +278,20 @@ def main():
 
     # Create evaluators
     evaluators = []
+    roi_evaluators = []  # For --car_eval
     if args.corner_eval:
         for tf, fv in zip(total_frames_list, fps_list):
-            evaluators.append(CornerEvaluator(args=args, total_frames=tf, fps=fv))
+            evaluators.append(CornerEvaluator(args=args, total_frames=tf))
     else:
         evaluators = [None] * len(caps)
+
+    if getattr(args, "car_eval", False):
+        audio_file = getattr(args, "calibration_audio", None)
+        for _ in caps:
+            roi_evaluators.append(CarEvaluator(roi_duration=4.0, transition_duration=2.0, audio_file=audio_file, ear_thresh=args.ear_thresh))
+            roi_evaluators[-1].start()
+    else:
+        roi_evaluators = [None] * len(caps)
 
     # Create gaze loggers
     gaze_loggers = [GazeLogger(angles=getattr(args, "angles", False), scatter=getattr(args, "scatter", False)) for _ in caps]
@@ -415,6 +432,7 @@ def main():
             evaluator = evaluators[i]
             gaze_logger = gaze_loggers[i]
             scorer = scorers[i]
+            roi_evaluator = roi_evaluators[i]
 
             # Display previous frame info
             if gaze_result is not None and iris_points is not None:
@@ -423,7 +441,7 @@ def main():
 
                 corner_name = gaze_result["corner_name"]
                 mid_ang = gaze_result["mid_ang"]
-                cv2.putText(frame, f"CornerAngle: {corner_name}", (10, 320), cv2.FONT_HERSHEY_PLAIN, 2, (255,0,0), 2)
+                # cv2.putText(frame, f"CornerAngle: {corner_name}", (10, 320), cv2.FONT_HERSHEY_PLAIN, 2, (255,0,0), 2)
                 detected = corner_name
 
                 ix = (iris_points[0][0] + iris_points[1][0]) / 2.0
@@ -446,6 +464,11 @@ def main():
                 left_mag = gaze_magnitude[0]
                 right_mag = gaze_magnitude[1]
                 gp_adj = gaze_result["gaze_points_adj"]
+                point_roi = gaze_result["roi_cluster"]
+
+                cv2.putText(frame, f"Point ROI: {point_roi}", (10, 320), cv2.FONT_HERSHEY_PLAIN, 2, (0,255,0), 2)
+
+
 
                 if gaze_logger.angles or gaze_logger.scatter:
                     elapsed = time.time() - start_time
@@ -468,10 +491,10 @@ def main():
                 frame = frame_det
 
             if ear is not None:
-                cv2.putText(frame, "EAR:" + str(round(ear, 3)), (10, 50), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 1, cv2.LINE_AA)
+                cv2.putText(frame, "EAR:" + str(round(ear, 3)), (10, 50), cv2.FONT_HERSHEY_PLAIN, 2, (155, 255, 22), 1, cv2.LINE_AA)
             if gaze is not None:
-                cv2.putText(frame, "Gaze Score:" + str(round(gaze, 3)), (10, 80), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 1, cv2.LINE_AA)
-                cv2.putText(frame, "PERCLOS:" + str(round(perclos_score, 3)), (10, 110), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 1, cv2.LINE_AA)
+                cv2.putText(frame, "Gaze Score:" + str(round(gaze, 3)), (10, 80), cv2.FONT_HERSHEY_PLAIN, 2, (155, 255, 22), 1, cv2.LINE_AA)
+                cv2.putText(frame, "PERCLOS:" + str(round(perclos_score, 3)), (10, 110), cv2.FONT_HERSHEY_PLAIN, 2, (155, 255, 22), 1, cv2.LINE_AA)
 
             if roll is not None:
                 cv2.putText(frame, "roll:" + str(roll.round(1)[0]), (450, 40), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
@@ -480,25 +503,30 @@ def main():
             if yaw is not None:
                 cv2.putText(frame, "yaw:" + str(yaw.round(1)[0]), (450, 100), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
 
-            if tired:
-                cv2.putText(frame, "TIRED!", (10, 280), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-            if asleep:
-                cv2.putText(frame, "ASLEEP!", (10, 300), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-            if looking_away:
-                cv2.putText(frame, "LOOKING AWAY!", (10, 320), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-            if distracted:
-                cv2.putText(frame, "DISTRACTED!", (10, 340), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+            # if tired:
+            #     cv2.putText(frame, "TIRED!", (10, 280), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+            # if asleep:
+            #     cv2.putText(frame, "ASLEEP!", (10, 300), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+            # if looking_away:
+            #     cv2.putText(frame, "LOOKING AWAY!", (10, 320), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+            # if distracted:
+            #     cv2.putText(frame, "DISTRACTED!", (10, 340), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
 
             if evaluator is not None:
                 info = evaluator.process_frame(frame_idxs[i], detected)
-                cv2.putText(frame, info["instr"], (10, 360), cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 255, 0), 2)
-                cv2.putText(frame, f"time left: {info['time_left']}", (10, 390), cv2.FONT_HERSHEY_PLAIN, 1.2, (255,255,0), 2)
-                y = 420
-                for ci, corner in enumerate(evaluator.corners):
-                    cv2.putText(frame, f"{corner}: {info['accuracies'][ci]*100:.1f}%", (10, y), cv2.FONT_HERSHEY_PLAIN, 1.0, (200,200,200), 1)
-                    y += 18
-                if info.get("finished"):
-                    evaluator.print_results()
+                cv2.putText(frame, f"Looking at: {info}", (10, 50), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 2)
+
+            # Handle ROI evaluation if enabled
+            if roi_evaluator is not None:
+                next_roi = roi_evaluator.get_current_roi()
+                is_roi_complete = roi_evaluator.update(next_roi, gaze_result, calibrated_rois=None, ear_score=ear)
+                
+                # Draw ROI evaluation overlay
+                if roi_evaluator.in_transition:
+                    cv2.putText(frame, f"TRANSITION: {next_roi} next", (10, 50), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 255, 0), 2)
+                else:
+                    cv2.putText(frame, f"EVALUATING: Look at {next_roi}", (10, 50), cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 255, 255), 2)
+                
 
             e2 = cv2.getTickCount()
             proc_time_frame_ms = ((e2 - e1) / cv2.getTickFrequency()) * 1000
@@ -545,8 +573,12 @@ def main():
 
     for i, ev in enumerate(evaluators):
         if ev is not None:
-            print(f"\n==== Evaluation results for Camera {cam_indices[i]} ====")
             ev.print_results()
+
+    # Print ROI evaluation results
+    for i, roi_ev in enumerate(roi_evaluators):
+        if roi_ev is not None:
+            roi_ev.print_results()
 
     # destroy all windows
     for cap in caps:
