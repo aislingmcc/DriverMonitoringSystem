@@ -174,7 +174,6 @@ class CarEvaluator:
             roi_point = gaze_result.get("roi_cluster", None)
             self.add_classifier("proximity", true_roi, roi_angle, true_roi)
             self.add_classifier("point_proximity", true_roi, roi_point, true_roi)
-
     ## ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ##
         if elapsed >= self.roi_duration:
             self.roi_index += 1

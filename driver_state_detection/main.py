@@ -149,7 +149,7 @@ def run_calibration(args, camera_matrix, dist_coeffs):
     calibration_outputs = getattr(args, "calibration_output", None)
     if calibration_outputs:
         if isinstance(calibration_outputs, str):
-            calibration_outputs = [calibration_outputs]
+            calibration_outputs = [calibration_outputs]                                   
         
         # Warn for mismatch in number of cameras and calibration json
         if len(calibration_outputs) != len(caps):
@@ -278,7 +278,6 @@ def main():
 
     # Create evaluators
     evaluators = []
-    roi_evaluators = []  # For --car_eval
     if args.corner_eval:
         for tf, fv in zip(total_frames_list, fps_list):
             evaluators.append(CornerEvaluator(args=args, total_frames=tf))
@@ -287,11 +286,11 @@ def main():
 
     if getattr(args, "car_eval", False):
         audio_file = getattr(args, "calibration_audio", None)
-        for _ in caps:
-            roi_evaluators.append(CarEvaluator(roi_duration=4.0, transition_duration=2.0, audio_file=audio_file, ear_thresh=args.ear_thresh))
-            roi_evaluators[-1].start()
+        # Single roi evaluator for whole run (handles multicam fusion)
+        roi_evaluator = CarEvaluator(roi_duration=4.0, transition_duration=2.0, audio_file=audio_file, ear_thresh=args.ear_thresh)
+        roi_evaluator.start()
     else:
-        roi_evaluators = [None] * len(caps)
+        roi_evaluator = None
 
     # Create gaze loggers
     gaze_loggers = [GazeLogger(angles=getattr(args, "angles", False), scatter=getattr(args, "scatter", False)) for _ in caps]
@@ -348,7 +347,10 @@ def main():
     camera_priority_selector = CameraPrioritySelector(priority_threshold=20)#0.2
     gaze_results_current = [None] * len(caps)
     head_poses_current = [None] * len(caps)
+    # per-camera recent EAR values (used to derive fused blink/eye-closed state)
+    ear_current = [None] * len(caps)
     prev_fusion_roi = None
+    prev_fusion_roi_point = None
 
     # Processing loop (single pass with one frame delayed fusion)
     while True:
@@ -420,6 +422,8 @@ def main():
                 
                 # Store head pose for priority selection
                 head_poses_current[i] = (roll, pitch, yaw) if roll is not None else None
+                # store recent EAR for this camera (used when fusing evaluator updates)
+                ear_current[i] = ear
                 
                 # Compute gaze result for current frame
                 if gaze_points is not None and iris_points is not None:
@@ -432,7 +436,7 @@ def main():
             evaluator = evaluators[i]
             gaze_logger = gaze_loggers[i]
             scorer = scorers[i]
-            roi_evaluator = roi_evaluators[i]
+            roi_eval = roi_evaluator
 
             # Display previous frame info
             if gaze_result is not None and iris_points is not None:
@@ -516,13 +520,11 @@ def main():
                 info = evaluator.process_frame(frame_idxs[i], detected)
                 cv2.putText(frame, f"Looking at: {info}", (10, 50), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 2)
 
-            # Handle ROI evaluation if enabled
-            if roi_evaluator is not None:
-                next_roi = roi_evaluator.get_current_roi()
-                is_roi_complete = roi_evaluator.update(next_roi, gaze_result, calibrated_rois=None, ear_score=ear)
-                
-                # Draw ROI evaluation overlay
-                if roi_evaluator.in_transition:
+            # Handle ROI evaluation overlay (actual update deferred until after fusion)
+            if roi_eval is not None:
+                next_roi = roi_eval.get_current_roi()
+                # Draw ROI evaluation overlay; state will be updated after multicamera fusion
+                if roi_eval.in_transition:
                     cv2.putText(frame, f"TRANSITION: {next_roi} next", (10, 50), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 255, 0), 2)
                 else:
                     cv2.putText(frame, f"EVALUATING: Look at {next_roi}", (10, 50), cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 255, 255), 2)
@@ -544,11 +546,22 @@ def main():
             frame_count += 1
             cv2.imshow(f"Camera {cam_indices[i]} - Press 'q' to terminate", frame)
 
-        # compute fusion result
+        # compute fusion result (both angle+magnitude and point-cluster)
         selected_indices = camera_priority_selector.select_cameras(gaze_results_current, head_poses_current)
-        fusion_result = multicam_roi_classifier.classify(gaze_results_current, selected_indices=selected_indices)
-        if fusion_result is not None:
-            prev_fusion_roi, prev_fusion_score = fusion_result
+        prev_fusion_roi, prev_fusion_roi_point = multicam_roi_classifier.classify(gaze_results_current, selected_indices=selected_indices)
+
+
+        if roi_evaluator is not None:
+            fused_gaze_result = {
+                "roi": prev_fusion_roi,
+                "roi_cluster": prev_fusion_roi_point,
+            }
+            # conservative fused ear: treat as closed if any camera reports low EAR
+            valid_ears = [e for e in ear_current if e is not None]
+            fused_ear = min(valid_ears) if valid_ears else None
+
+            next_roi = roi_evaluator.get_current_roi()
+            _ = roi_evaluator.update(next_roi, fused_gaze_result, calibrated_rois=None, ear_score=fused_ear)
 
         # break on Q key pressed 
         if cv2.waitKey(20) & 0xFF == ord('q'):
@@ -575,10 +588,9 @@ def main():
         if ev is not None:
             ev.print_results()
 
-    # Print ROI evaluation results
-    for i, roi_ev in enumerate(roi_evaluators):
-        if roi_ev is not None:
-            roi_ev.print_results()
+    # Print ROI evaluation results (single evaluator)
+    if roi_evaluator is not None:
+        roi_evaluator.print_results()
 
     # destroy all windows
     for cap in caps:

@@ -64,7 +64,7 @@ def _get_default_rois():
         "right_window": {"angle": 200.0, "left_mag": 1.3, "right_mag": 1.3},
     }
 
-def classify_by_proximity(gaze_points, gaze_magnitude, angle_close_thresh=5.0, calibrated_rois = None):
+def classify_by_angle_magnitude(gaze_points, gaze_magnitude, angle_close_thresh=5.0, calibrated_rois = None):
     """
     Classify gaze to ROI using angle and magnitude proximity.       
     Returns: (roi_name, angle_distance)
@@ -101,7 +101,7 @@ def classify_by_proximity(gaze_points, gaze_magnitude, angle_close_thresh=5.0, c
     return roi, float(angle_dists[roi])
 
 
-def classify_by_point_proximity(gaze_points, calibrated_rois= None):
+def classify_by_point_cluster(gaze_points, calibrated_rois= None):
     if gaze_points is None:
         return "none", float('inf')
 
@@ -137,7 +137,7 @@ def classify_by_point_proximity(gaze_points, calibrated_rois= None):
     return roi, float(distances[roi])
 
 
-def classify_by_proximity_multicam(gaze_data_list, calibrated_rois_list = None, angle_close_thresh = 5.0):
+def classify_by_angle_magnitude_multicam(gaze_data_list, calibrated_rois_list = None, angle_close_thresh = 5.0):
     """
     Algorithm:
     1. For each camera, compute circular angle difference for all ROIs
@@ -149,11 +149,11 @@ def classify_by_proximity_multicam(gaze_data_list, calibrated_rois_list = None, 
     if not gaze_data_list:
         return "none", 0.0
 
-    # Handle case of single camera
+    # Handle case of single camera ################ 
     if len(gaze_data_list) == 1:
         gaze_data = gaze_data_list[0]
         rois = calibrated_rois_list[0] if calibrated_rois_list else None
-        return classify_by_proximity(gaze_data["mid_ang"], gaze_data["gaze_magnitude"], angle_close_thresh, rois)
+        return classify_by_angle_magnitude(gaze_data["mid_ang"], gaze_data["gaze_magnitude"], angle_close_thresh, rois)
 
     # Get ROI definitions per camera
     if calibrated_rois_list is None:
@@ -226,7 +226,74 @@ def classify_by_proximity_multicam(gaze_data_list, calibrated_rois_list = None, 
     return roi, float(summed_angle_dists[roi])
 
 
-def classify_by_angle(gaze_points, iris_points):
+def classify_by_point_cluster_multicam(gaze_points_list, calibrated_rois_list=None):
+
+    if not gaze_points_list:
+        return "none", float('inf')
+
+    # Single camera
+    if len(gaze_points_list) == 1:
+        gp = gaze_points_list[0]
+        rois = calibrated_rois_list[0] if calibrated_rois_list else None
+        return classify_by_point_cluster(gp, calibrated_rois=rois)
+
+    # calibrated ROIs per camera
+    if calibrated_rois_list is None:
+        calibrated_rois_list = [None] * len(gaze_points_list)
+
+    # Find first camera that has centroid data to get ROI names
+    roi_names = None
+    for rois in calibrated_rois_list:
+        if rois is not None:
+            roi_names = [k for k, v in rois.items() if "centroid_x" in v and "centroid_y" in v]
+            if roi_names:
+                break
+
+    if not roi_names:
+        return "none", float('inf')
+
+    # Sum distances across cameras for each ROI
+    summed_dists = {roi: 0.0 for roi in roi_names}
+    contrib_counts = {roi: 0 for roi in roi_names}
+
+    for cam_idx, gp in enumerate(gaze_points_list):
+        if gp is None:
+            continue
+
+        rois = calibrated_rois_list[cam_idx] if cam_idx < len(calibrated_rois_list) else None
+        if rois is None:
+            continue
+
+        gp_arr = np.asarray(gp, dtype=np.float32)
+        if gp_arr.size < 2:
+            continue
+        gx, gy = float(gp_arr[0]), float(gp_arr[1])
+
+        for roi in roi_names:
+            roi_data = rois.get(roi, None)
+            if roi_data is None:
+                continue
+            if "centroid_x" not in roi_data or "centroid_y" not in roi_data:
+                continue
+            cx = float(roi_data["centroid_x"])
+            cy = float(roi_data["centroid_y"])
+            dist = np.sqrt((gx - cx) ** 2 + (gy - cy) ** 2)
+            summed_dists[roi] += dist
+            contrib_counts[roi] += 1
+
+    # If no contributions for any ROI, cannot classify
+    if all(contrib_counts[roi] == 0 for roi in roi_names):
+        return "none", float('inf')
+
+    valid_candidates = {r: d for r, d in summed_dists.items() if contrib_counts[r] > 0}
+    if not valid_candidates:
+        return "none", float('inf')
+
+    best_roi = min(valid_candidates, key=valid_candidates.get)
+    return best_roi, float(valid_candidates[best_roi])
+
+
+def classify_by_corner(gaze_points, iris_points):
     """
     Classify gaze to one of four corners using midpoint angle for camera test 
     """
@@ -367,8 +434,6 @@ class GazeLogger:
         plt.show()
 
 class GazeProcessor:
-    """adjust by headpose -> determine 
-    t -> compute vectors/angles -> classify"""
 
     def __init__(
         self,
@@ -418,11 +483,11 @@ class GazeProcessor:
             ratio_threshold=self.ratio_threshold
         )
 
-        corner_name, _ = classify_by_angle(mid_ang, iris_points)
+        corner_name, _ = classify_by_corner(mid_ang, iris_points)
 
         # Use selected classifier method with the reliable eye data
-        roi, _ = classify_by_point_proximity(mid_pt, calibrated_rois=self.calibrated_rois)
-        roi_cluster, _ = classify_by_proximity(mid_ang, gaze_magnitude, calibrated_rois=self.calibrated_rois)
+        roi_cluster, _ = classify_by_point_cluster(mid_pt, calibrated_rois=self.calibrated_rois)
+        roi, _ = classify_by_angle_magnitude(mid_ang, gaze_magnitude, calibrated_rois=self.calibrated_rois)
 
         return {
             "gaze_points_adj": mid_pt,
@@ -445,6 +510,7 @@ class CameraPrioritySelector:
 
     def __init__(self, priority_threshold=0.2):
         self.priority_threshold = priority_threshold
+        self.prev_selected = None
 
     def select_cameras(self, gaze_results_list, head_poses_list):
         if len(gaze_results_list) <= 1:
@@ -464,20 +530,36 @@ class CameraPrioritySelector:
             pose_score = 0.7 * pose_score #+ 0.3 
             scores.append(pose_score)
 
+        ##larger score is the chosen camera always
+        ## print if the camera selection changes from the previous frame for debugging
+        if scores[0] > scores[1]: 
+            if self.prev_selected != 0:
+                print("Camera 0 prioritized")
+            self.prev_selected = 0
+            return [0]
+        elif scores[1] > scores[0]:
+            if self.prev_selected != 1:
+                print("Camera 1 prioritized")
+            self.prev_selected = 1
+            return [1]
+        
+        ## testing camera always has a priority
+
         # Find valid cameras (those with results)
-        valid_cameras = [i for i, score in enumerate(scores) if score > 0]
+        # valid_cameras = [i for i, score in enumerate(scores) if score > 0]
 
-        # Sort by score descending
-        sorted_valid = sorted(valid_cameras, key=lambda i: scores[i], reverse=True)
-        best_score = scores[sorted_valid[0]]
-        second_score = scores[sorted_valid[1]] if len(sorted_valid) > 1 else 0
+        # # Sort by score descending
+        # sorted_valid = sorted(valid_cameras, key=lambda i: scores[i], reverse=True)
+        # best_score = scores[sorted_valid[0]]
+        # second_score = scores[sorted_valid[1]] if len(sorted_valid) > 1 else 0
 
-        # Check if significant difference between best and second
-        if best_score > second_score * (1 + self.priority_threshold):
-            print("Camera ", sorted_valid[0], " prioritized for fusion")
-            return [sorted_valid[0]]
-        else:
-            return sorted_valid
+        # # Check if significant difference between best and second
+        # if best_score > second_score * (1 + self.priority_threshold):
+        #     print("Camera ", sorted_valid[0], " prioritized for fusion")
+        #     return [sorted_valid[0]]
+        # else:
+        #     return sorted_valid
+
 
 
 class MultiCameraROIClassifier:
@@ -485,7 +567,7 @@ class MultiCameraROIClassifier:
         self.calibrated_rois_list = calibrated_rois_list
         self.angle_close_thresh = angle_close_thresh
 
-    def classify(self, gaze_results_list, selected_indices=None):
+    def classify(self, gaze_results_list, selected_indices=None, method: Optional[str] = None):
         # Filter to selected cameras if provided
         if selected_indices is not None:
             filtered_results = [gaze_results_list[i] if i in selected_indices else None for i in range(len(gaze_results_list))]
@@ -515,11 +597,21 @@ class MultiCameraROIClassifier:
         else:
             calibrated_rois_subset = [self.calibrated_rois_list[i] for i in valid_indices]
 
-        # Classify using combined method
-        roi_name, score = classify_by_proximity_multicam(
+        gaze_points_list = []
+        for idx, result in enumerate(filtered_results):
+            if result is not None:
+                gaze_points_list.append(result.get("gaze_points_adj", None))
+            else:
+                gaze_points_list.append(None)
+
+        roi_angle, score_angle = classify_by_angle_magnitude_multicam(
             gaze_data_list,
             calibrated_rois_list=calibrated_rois_subset,
             angle_close_thresh=self.angle_close_thresh,
         )
 
-        return roi_name, score
+        roi_point, score_point = classify_by_point_cluster_multicam(
+            gaze_points_list=[g for g in gaze_points_list if g is not None],
+            calibrated_rois_list=calibrated_rois_subset,
+        )
+        return roi_angle, roi_point
