@@ -558,7 +558,7 @@ def main():
             }
             # conservative fused ear: treat as closed if any camera reports low EAR
             valid_ears = [e for e in ear_current if e is not None]
-            fused_ear = min(valid_ears) if valid_ears else None
+            fused_ear = max(valid_ears) if valid_ears else None
 
             next_roi = roi_evaluator.get_current_roi()
             _ = roi_evaluator.update(next_roi, fused_gaze_result, calibrated_rois=None, ear_score=fused_ear)
