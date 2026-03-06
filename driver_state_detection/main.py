@@ -1,6 +1,7 @@
 import time
 import pprint
 import json
+import os 
 
 import cv2
 import mediapipe as mp
@@ -8,20 +9,44 @@ import numpy as np
 
 from attention_scorer import AttentionScorer as AttScorer
 from eye_detector import EyeDetector as EyeDet
-from evaluation import CornerEvaluator, CarEvaluator#, AudioPlayer
+from evaluation import CornerEvaluator, CarEvaluator
 from args_parser import get_args
 from pose_estimation import HeadPoseEstimator as HeadPoseEst
 from utils import get_landmarks, load_camera_parameters
 import matplotlib.pyplot as plt
 from gaze_utils import GazeProcessor, GazeLogger, MultiCameraROIClassifier, CameraPrioritySelector
 from calibration import Calibration
-# from evaluation import CarEvaluator as EvalManager
-
+from video_recorder import VideoRecorder
 
 def run_calibration(args, camera_matrix, dist_coeffs):
     cam_indices = list(getattr(args, "camera", [0]))
-    caps = [cv2.VideoCapture(int(ci)) for ci in cam_indices]
+    caps = []
     
+    if getattr(args, "video", None):
+        video_path = args.video
+        # multiple cameras
+        if os.path.isdir(video_path):
+            video_files = []
+            cam_idx = 0
+            while os.path.exists(os.path.join(video_path, f"cam{cam_idx}.mp4")):
+                video_files.append(os.path.join(video_path, f"cam{cam_idx}.mp4"))
+                cam_idx += 1
+            caps = [cv2.VideoCapture(vf) for vf in video_files]
+            cam_indices = list(range(len(video_files)))
+
+        else:
+            caps = [cv2.VideoCapture(video_path)]
+            cam_indices = [0]
+    else:
+        # Use cameras
+        caps = [cv2.VideoCapture(int(ci)) for ci in cam_indices]
+    
+    recorder = None
+    if getattr(args, "record", None):
+        recorder = VideoRecorder(getattr(args, "record"), cam_indices)
+        frame_size = [None] * len(caps)
+        fps_list = [float(cap.get(cv2.CAP_PROP_FPS) or 30.0) for cap in caps]
+
     detectors,eye_dets, head_poses, gaze_procs, calib_mgrs = [],[],[],[],[]
     
     # Audio file for calibration instructions
@@ -41,7 +66,7 @@ def run_calibration(args, camera_matrix, dist_coeffs):
         gaze_procs.append(GazeProcessor())
         
         # Creates calibration manager 
-        calib_mgrs.append(Calibration(roi_duration=args.calibration_duration, transition_duration=2.0, audio_file=audio_file, ear_thresh=args.ear_thresh))
+        calib_mgrs.append(Calibration(roi_duration=args.calibration_duration, transition_duration=3.0, audio_file=audio_file, ear_thresh=args.ear_thresh))
         calib_mgrs[i].start_calibration()
 
     all_complete = [False] * len(caps)
@@ -89,7 +114,6 @@ def run_calibration(args, camera_matrix, dist_coeffs):
                         right_vec = gaze_result.get("right_vec", None)
 
                         # Update calibration current frame data (pass gaze_points_adj and eye vectors for proper calibration)
-                        # Pass ear_score for blink detection - frames with blinks will be skipped
                         is_complete = calib_mgrs[i].update(mid_ang, left_mag, right_mag, gaze_points_adj=gp_adj, 
                                                            left_vec=left_vec, right_vec=right_vec, ear_score=ear)
 
@@ -102,6 +126,14 @@ def run_calibration(args, camera_matrix, dist_coeffs):
 
             # Draw calibration overlay 
             calib_mgrs[i].draw_overlay(frame)
+
+            # record 
+            if recorder:
+                if not recorder.initialised:
+                    frame_size[i] = (frame.shape[1], frame.shape[0])
+                    if all(s is not None for s in frame_size):
+                        recorder.init(frame_size, fps_list)
+                recorder.write(i, frame)
 
             cv2.imshow(f"Calibration - Camera {cam_indices[i]}", frame)
 
@@ -119,6 +151,8 @@ def run_calibration(args, camera_matrix, dist_coeffs):
                 return None
 
     # Release resources
+    if recorder:
+        recorder.release()
     for cap in caps:
         cap.release()
     for det in detectors:
@@ -149,7 +183,7 @@ def run_calibration(args, camera_matrix, dist_coeffs):
     calibration_outputs = getattr(args, "calibration_output", None)
     if calibration_outputs:
         if isinstance(calibration_outputs, str):
-            calibration_outputs = [calibration_outputs]                                   
+            calibration_outputs = [calibration_outputs]
         
         # Warn for mismatch in number of cameras and calibration json
         if len(calibration_outputs) != len(caps):
@@ -255,13 +289,29 @@ def main():
     caps = []
     cam_indices = []
     num_cams = 0
-    # if video input is provided
+
+    # when --video file is provided
     if getattr(args, "video", None):
         video_path = args.video
-        caps = [cv2.VideoCapture(video_path)]
-        cam_indices = ["video"]
-        num_cams = 1
+        
+        # When video path is a directory => multi camera folder
+        if os.path.isdir(video_path):
+            video_files = []
+            cam_idx = 0
+            while os.path.exists(os.path.join(video_path, f"cam{cam_idx}.mp4")):
+                video_files.append(os.path.join(video_path, f"cam{cam_idx}.mp4"))
+                cam_idx += 1
+            
+            caps = [cv2.VideoCapture(vf) for vf in video_files]
+            cam_indices = list(range(len(video_files)))
+            num_cams = len(video_files)
+        else:
+            # Single video file
+            caps = [cv2.VideoCapture(video_path)]
+            cam_indices = ["video"]
+            num_cams = 1
     else:
+        # camera input
         cam_indices = list(getattr(args, "camera", [0]))
         caps = [cv2.VideoCapture(int(ci)) for ci in cam_indices]
         num_cams = len(cam_indices)
@@ -269,12 +319,14 @@ def main():
     total_frames_list = []
     fps_list = []
     for cap in caps:
-        try:
-            total_frames_list.append(int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0))
-            fps_list.append(float(cap.get(cv2.CAP_PROP_FPS) or 0.0))
-        except Exception:
-            total_frames_list.append(0)
-            fps_list.append(0.0)
+        total_frames_list.append(int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0))
+        fps_list.append(float(cap.get(cv2.CAP_PROP_FPS) or 0.0))
+
+    recorder = None
+    frame_size = None
+    if getattr(args, "record", None):
+        recorder = VideoRecorder(getattr(args, "record"), cam_indices)
+        frame_size = [None] * len(caps)
 
     # Create evaluators
     evaluators = []
@@ -286,8 +338,7 @@ def main():
 
     if getattr(args, "car_eval", False):
         audio_file = getattr(args, "calibration_audio", None)
-        # Single roi evaluator for whole run (handles multicam fusion)
-        roi_evaluator = CarEvaluator(roi_duration=4.0, transition_duration=2.0, audio_file=audio_file, ear_thresh=args.ear_thresh)
+        roi_evaluator = CarEvaluator(roi_duration=4.0, transition_duration=3.0, audio_file=audio_file, ear_thresh=args.ear_thresh)
         roi_evaluator.start()
     else:
         roi_evaluator = None
@@ -342,17 +393,18 @@ def main():
 
         gaze_processors.append(GazeProcessor(calibrated_rois=cam_calibrated_rois, roi_classifier=getattr(args, "roi_classifier", "proximity")))
 
-    # Initialize multi-camera ROI classifier
+    # Initialise multi-camera ROI classifier
     multicam_roi_classifier = MultiCameraROIClassifier(calibrated_rois_list=calibrated_rois_list)
     camera_priority_selector = CameraPrioritySelector(priority_threshold=20)#0.2
     gaze_results_current = [None] * len(caps)
     head_poses_current = [None] * len(caps)
-    # per-camera recent EAR values (used to derive fused blink/eye-closed state)
     ear_current = [None] * len(caps)
+    last_yaw_current=[None]*len(caps)  
     prev_fusion_roi = None
     prev_fusion_roi_point = None
+    prev_fusion_roi_mahal=None
+    selected_camera_list = []  
 
-    # Processing loop (single pass with one frame delayed fusion)
     while True:
         any_active = False
         t_now = time.perf_counter()
@@ -368,12 +420,10 @@ def main():
 
             any_active = True
             frame_idxs[i] += 1
+
             ret, frame = cap.read()
             if not ret:
-                try:
-                    cap.release()
-                except Exception:
-                    pass
+                cap.release()
                 caps[i] = None
                 gaze_results_current[i] = None
                 continue
@@ -397,7 +447,7 @@ def main():
 
             lms = detectors[i].process(rgb).multi_face_landmarks
 
-            # initialize variables
+            # initialise variables
             landmarks = None
             ear = None
             perclos_score = 0.0
@@ -418,11 +468,15 @@ def main():
                 frame_det, roll, pitch, yaw = head_poses[i].get_pose(frame=frame, landmarks=landmarks, frame_size=frame_size)
                 gaze = eye_dets[i].get_Gaze_Score(frame=frame, landmarks=landmarks, frame_size=frame_size)
 
+                # for over shoulder detection 
+                if yaw is not None:
+                    last_yaw_current[i] = yaw
+
                 gaze_points, iris_points, gaze_magnitude = eye_dets[i].get_Gaze_Vector(frame=frame, landmarks=landmarks, frame_size=frame_size)
                 
                 # Store head pose for priority selection
                 head_poses_current[i] = (roll, pitch, yaw) if roll is not None else None
-                # store recent EAR for this camera (used when fusing evaluator updates)
+                # store recent EAR for closed eye detection 
                 ear_current[i] = ear
                 
                 # Compute gaze result for current frame
@@ -440,9 +494,7 @@ def main():
 
             # Display previous frame info
             if gaze_result is not None and iris_points is not None:
-                # Draw gaze vectors
                 gp_adj = gaze_result["gaze_points_adj"]
-
                 corner_name = gaze_result["corner_name"]
                 mid_ang = gaze_result["mid_ang"]
                 # cv2.putText(frame, f"CornerAngle: {corner_name}", (10, 320), cv2.FONT_HERSHEY_PLAIN, 2, (255,0,0), 2)
@@ -450,17 +502,11 @@ def main():
 
                 ix = (iris_points[0][0] + iris_points[1][0]) / 2.0
                 iy = (iris_points[0][1] + iris_points[1][1]) / 2.0
-
                 start = (int(ix), int(iy))
                 end = (int(gp_adj[0]), int(gp_adj[1]))
+                cv2.arrowedLine(frame, start, end, (255, 0, 255), 2, tipLength=0.2)
 
-                cv2.arrowedLine(frame, start, end, (0, 255, 255), 2, tipLength=0.2)
-
-
-                # Display previous frame info
-                if prev_fusion_roi is not None:
-                    cv2.putText(frame, f"ROI: {prev_fusion_roi}", (10, 350), cv2.FONT_HERSHEY_PLAIN, 2, (0,255,0), 2)
-
+                # Display previous frame inf
                 left_vec = gaze_result["left_vec"]
                 right_vec = gaze_result["right_vec"]
                 left_ang = gaze_result["left_ang"]
@@ -470,18 +516,25 @@ def main():
                 gp_adj = gaze_result["gaze_points_adj"]
                 point_roi = gaze_result["roi_cluster"]
 
-                cv2.putText(frame, f"Point ROI: {point_roi}", (10, 320), cv2.FONT_HERSHEY_PLAIN, 2, (0,255,0), 2)
+                # Display previous frame info   
+                if prev_fusion_roi is not None:
+                    cv2.putText(frame, f"Point ROI: {prev_fusion_roi_point}", (10, 350), cv2.FONT_HERSHEY_PLAIN, 2, (0,255,0), 2)
+                    cv2.putText(frame, f"Angle ROI: {prev_fusion_roi}", (10, 320), cv2.FONT_HERSHEY_PLAIN, 2, (0,255,0), 2)
+                    cv2.putText(frame, f"Mahalanobis ROI: {prev_fusion_roi_mahal}", (10, 380), cv2.FONT_HERSHEY_PLAIN, 2, (0,255,0), 2)
 
-
-
+                # logging for scatter/angle if enabled
                 if gaze_logger.angles or gaze_logger.scatter:
                     elapsed = time.time() - start_time
-                    gaze_logger.log(left_ang, right_ang, mid_ang, left_mag, right_mag, elapsed, gaze_points_adj=gp_adj)
+                    
+                    gaze_logger.log(left_ang, right_ang, mid_ang, left_mag, right_mag, elapsed, gaze_points_adj=gp_adj, roi_label=roi_eval.get_current_roi())
                     if gaze_logger.angles:
                         cv2.putText(frame, f"L:{left_ang:.1f}  R:{right_ang:.1f}  M:{mid_ang:.1f}",
                                     (10, 205), cv2.FONT_HERSHEY_PLAIN, 1.3, (180, 255, 180), 2)
 
-            # evaluate attention scores even when landmarks are missing (scorer handles None values)
+            else:
+                gaze_logger.log(None, None, None, None, None, None, gaze_points_adj=[0,0],roi_label=None)
+
+            # evaluate attention scores even when landmarks are missing 
             asleep, looking_away, distracted = scorer.eval_scores(
                 t_now=t_now,
                 ear_score=ear,
@@ -520,14 +573,13 @@ def main():
                 info = evaluator.process_frame(frame_idxs[i], detected)
                 cv2.putText(frame, f"Looking at: {info}", (10, 50), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 2)
 
-            # Handle ROI evaluation overlay (actual update deferred until after fusion)
+            # Handle ROI evaluation overlay 
             if roi_eval is not None:
                 next_roi = roi_eval.get_current_roi()
-                # Draw ROI evaluation overlay; state will be updated after multicamera fusion
                 if roi_eval.in_transition:
-                    cv2.putText(frame, f"TRANSITION: {next_roi} next", (10, 50), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 255, 0), 2)
+                    cv2.putText(frame, f"TRANSITION: {next_roi} next", (10, 200), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 255, 0), 2)
                 else:
-                    cv2.putText(frame, f"EVALUATING: Look at {next_roi}", (10, 50), cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 255, 255), 2)
+                    cv2.putText(frame, f"EVALUATING: Look at {next_roi}", (10, 200), cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 255, 255), 2)
                 
 
             e2 = cv2.getTickCount()
@@ -544,19 +596,48 @@ def main():
                 cv2.putText(frame, "PROC. TIME FRAME:" + str(round(proc_time_frame_ms, 0)) + "ms", (10, 430), cv2.FONT_HERSHEY_PLAIN, 2, (255, 0, 255), 1)
 
             frame_count += 1
+            # record final displayed 
+            if recorder:
+                if not recorder.initialised:
+                    frame_size[i] = (frame.shape[1], frame.shape[0])
+                    if all(s is not None for s in frame_size):
+                        recorder.init(frame_size, fps_list)
+                recorder.write(i, frame)
+
             cv2.imshow(f"Camera {cam_indices[i]} - Press 'q' to terminate", frame)
 
-        # compute fusion result (both angle+magnitude and point-cluster)
-        selected_indices = camera_priority_selector.select_cameras(gaze_results_current, head_poses_current)
-        prev_fusion_roi, prev_fusion_roi_point = multicam_roi_classifier.classify(gaze_results_current, selected_indices=selected_indices)
+        # compute fusion result (angle+magnitude, point cluster, and mahalanobis)
+        selected = camera_priority_selector.select_cameras(gaze_results_current, head_poses_current)
+        if selected is not None:
+            selected_camera_list.append(selected+1)
+        prev_fusion_roi, prev_fusion_roi_point, prev_fusion_roi_mahal = \
+            multicam_roi_classifier.classify(gaze_results_current, selected=selected)
 
+        # when not facial landmarks are detected
+        if gaze is None:
+            # use last valid yaw from any camera
+            valid_yaws = [(i, yaw) for i, yaw in enumerate(last_yaw_current) if yaw is not None]
+            if valid_yaws:
+                _, last_yaw = valid_yaws[0]
+                if isinstance(last_yaw, np.ndarray):
+                    last_yaw = last_yaw[0]
+                # Positive yaw =? looking over right shoulder, Negative yaw => looking over left shoulder
+                if last_yaw > 0:
+                    prev_fusion_roi = "over_right_shoulder"
+                    prev_fusion_roi_point = "over_right_shoulder"
+                    prev_fusion_roi_mahal = "over_right_shoulder"
+                else:
+                    prev_fusion_roi = "over_left_shoulder"
+                    prev_fusion_roi_point = "over_left_shoulder"
+                    prev_fusion_roi_mahal = "over_left_shoulder"
 
         if roi_evaluator is not None:
             fused_gaze_result = {
                 "roi": prev_fusion_roi,
                 "roi_cluster": prev_fusion_roi_point,
+                "roi_mahal": prev_fusion_roi_mahal,
             }
-            # conservative fused ear: treat as closed if any camera reports low EAR
+            # Eye open when low camera says it is 
             valid_ears = [e for e in ear_current if e is not None]
             fused_ear = max(valid_ears) if valid_ears else None
 
@@ -581,18 +662,41 @@ def main():
         if gl is not None and gl.angles:
             gl.print_summary(cam_index=cam_indices[i])
             gl.plot(cam_index=cam_indices[i])
-        if gl is not None and gl.scatter and len(gl._gaze_points_x) > 0:
-            gl.scatter_plot(cam_index=cam_indices[i])
+        if gl is not None and gl.scatter:
+            if len(gl._gaze_points_x) > 0:
+                calib_for_cam = None
+                if calibrated_rois_list and i < len(calibrated_rois_list):
+                    calib_for_cam = calibrated_rois_list[i]
+                # if car_evaluation specify the colour for each roi
+                colour_per_roi = getattr(args, "car_eval", False) and calib_for_cam is not None
+                # fix for mismatch of points to camera lists, just incase
+                npoints = len(gl._gaze_points_x)
+                adjusted_selected = selected_camera_list
+                if len(adjusted_selected) > npoints:
+                    adjusted_selected = adjusted_selected[:npoints]
+                elif len(adjusted_selected) < npoints:
+                    pad_val = adjusted_selected[-1] if adjusted_selected else None
+                    adjusted_selected.extend([pad_val] * (npoints - len(adjusted_selected)))
 
+                gl.scatter_plot(cam_index=cam_indices[i], 
+                                calibrated_rois=calib_for_cam, 
+                                show_centroid=getattr(args, "centroid", False), 
+                                show_ellipse=getattr(args, "ellipse", False), 
+                                colour_per_roi=colour_per_roi, selected_camera=adjusted_selected)
+
+    # corner evaluation results 
     for i, ev in enumerate(evaluators):
         if ev is not None:
             ev.print_results()
 
-    # Print ROI evaluation results (single evaluator)
+    # Print ROI evaluation results 
     if roi_evaluator is not None:
         roi_evaluator.print_results()
 
     # destroy all windows
+    if recorder:
+        recorder.release()
+
     for cap in caps:
         cap.release()
 

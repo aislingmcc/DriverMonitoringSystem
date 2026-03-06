@@ -3,14 +3,15 @@ import cv2
 import numpy as np
 import threading
 import subprocess
-# from gaze_utils import select_reliable_eye
 
 class Calibration:
 
     def __init__(self, roi_duration= 4.0, transition_duration= 2.0, audio_file=None, ear_thresh=0.2):
         self.roi_duration = roi_duration
         self.transition_duration = transition_duration
-        self.roi_names = ["left_mirror", "right_mirror", "radio", "road", "lap", "rearmirror","left_window", "right_window"]
+        # Keep calibration ROIs to the camera-calibrated set only.
+        # Shoulder ROIs are handled separately and are NOT part of calibration.
+        self.roi_names = ["left_mirror", "right_mirror", "road", "rearmirror", "left_window", "right_window"]
         self.roi_index = 0
         self.calibration_data = {}
         self.in_transition = False
@@ -61,7 +62,7 @@ class Calibration:
                 self.current_gaze_points = []
             return False
 
-        # Only collect data if valid gaze data is available AND eyes are open (not blinking)
+        # Only collect data if eyes are open 
         if mid_ang is not None and left_mag is not None and right_mag is not None and not eye_closed:
             # arrays for current ROI 
             self.current_mid_angles.append(mid_ang)
@@ -73,7 +74,6 @@ class Calibration:
         if elapsed >= self.roi_duration:
             roi_name = self.roi_names[self.roi_index]
             
-            # if len(self.current_mid_angles) > 0:
             roi_data = {"angle": float(np.median(self.current_mid_angles)) if len(self.current_mid_angles) > 0 else 0.0,
                         "left_mag": float(np.median(self.current_left_mags)) if len(self.current_left_mags) > 0 else 0.0,
                         "right_mag": float(np.median(self.current_right_mags)) if len(self.current_right_mags) > 0 else 0.0,
@@ -87,6 +87,20 @@ class Calibration:
                 # print(f"Centroid for {roi_name}: ({centroid_x}, {centroid_y})")
                 roi_data["centroid_x"] = centroid_x
                 roi_data["centroid_y"] = centroid_y
+                
+                # Compute mean and covariance for Mahalanobis distance classification
+                # mean_x = float(np.mean(gaze_points_array[:, 0]))
+                # mean_y = float(np.mean(gaze_points_array[:, 1]))
+                # roi_data["mahal_mean"] = [mean_x, mean_y]
+
+                # Compute covariance matrix
+                if len(gaze_points_array) >= 2:
+                    cov_matrix = np.cov(gaze_points_array.T)
+                    roi_data["mahal_cov"] = cov_matrix.tolist()
+                # else:
+                #     print("this can't be deleted 4")
+                #     # Fallback for single point: use identity matrix
+                #     roi_data["mahal_cov"] = [[1.0, 0.0], [0.0, 1.0]]
 
             self.calibration_data[roi_name] = roi_data
 
@@ -161,11 +175,11 @@ class AudioPlayer:
         self.playback_thread.start()
 
     def _play_audio(self):
-        try:
-            subprocess.Popen(["ffplay", "-nodisp", "-autoexit", self.audio_file])
-            return
-        except FileNotFoundError:
-            pass
+        # try:
+        subprocess.Popen(["ffplay", "-nodisp", "-autoexit", self.audio_file])
+        return
+        # except FileNotFoundError:
+        #     pass
 
     def stop(self):
         self.is_playing = False

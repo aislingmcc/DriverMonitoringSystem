@@ -21,7 +21,6 @@ def get_args():
         help="Path to the camera parameters file (JSON or YAML).",
     )
 
-    # optional input video file (when provided, video is used instead of camera)
     parser.add_argument(
         "--video",
         type=str,
@@ -35,7 +34,7 @@ def get_args():
         type=float,
         default=1.0,
         metavar="",
-        help="Scale factor (0.1-1.0) to downscale video frames when using --video; values <1.0 reduce resolution and CPU usage.",
+        help="Scale factor (0.1-1.0) to downscale video input",
     )
 
     # visualisation parameters
@@ -75,7 +74,6 @@ def get_args():
         help="Prints additional info, default is false",
     )
 
-    # corner evaluation mode: runs a timed sequence where the user looks at each corner
     parser.add_argument(
         "--corner_eval",
         action="store_true",
@@ -86,28 +84,38 @@ def get_args():
         type=float,
         default=5.0,
         metavar="",
-        help="Seconds per corner segment in evaluation (default 10).",
+        help="Seconds per corner segment in evaluation.",
     )
     parser.add_argument(
         "--eval_exclude_secs",
         type=float,
         default=1.0,
         metavar="",
-        help="Seconds to exclude at start and end of each segment when computing accuracy (default 1 -> middle 8s used for 10s segment).",
+        help="Seconds to exclude at start and end of each segment",
     )
 
     parser.add_argument(
         "--angles",
-        # type=bool,
-        # default=False,
         action="store_true",
-        help="returns the right and left eye gaze angles plot and information for duration of the run"
+        help="returns the right and left eye gaze angles plot",
     )
 
     parser.add_argument(
         "--scatter",
         action="store_true",
-        help="returns a scatter plot of gaze points (x, y coordinates) for duration of the run"
+        help="returns a scatter plot of gaze points (x, y coordinates)"
+    )
+
+    parser.add_argument(
+        "--ellipse",
+        action="store_true",
+        help="When used with --scatter and --calibration_output display Mahalanobis ellipses for each ROI on scatter plots",
+    )
+
+    parser.add_argument(
+        "--centroid",
+        action="store_true",
+        help="When used with --scatter and --calibration_output display ROI centroids on scatter plots",
     )
 
     parser.add_argument(
@@ -130,7 +138,7 @@ def get_args():
     parser.add_argument(
         "--ear_thresh",
         type=float,
-        default=0.15,
+        default=0.1,
         metavar="",
         help="Sets the EAR threshold for the Attention Scorer, default is 0.15",
     )
@@ -184,7 +192,6 @@ def get_args():
         help="Sets the Pose time threshold (seconds) for the Attention Scorer, default is 2.5 seconds",
     )
 
-    # Calibration mode: user looks at each ROI for N seconds; system records mean angles/magnitudes
     parser.add_argument(
         "--calibrate",
         action="store_true",
@@ -195,7 +202,7 @@ def get_args():
         type=float,
         default=4,
         metavar="",
-        help="Duration (seconds) to look at each ROI during calibration (default 4.1).",
+        help="Duration (seconds) to look at each ROI during calibration.",
     )
     parser.add_argument(
         "--calibration_output",
@@ -203,21 +210,33 @@ def get_args():
         nargs='+',
         default=None,
         metavar="",
-        help="Optional file path(s) to save/load calibration data as JSON. Provide one file per camera (e.g., cal1.json cal2.json).",
+        help="Optional file path(s) to save/load calibration data as JSON. Provide one file per camera.",
     )
     parser.add_argument(
         "--calibration_audio",
         type=str,
         default=None,
         metavar="",
-        help="Optional audio file path (.wav, .mp3, .m4a) with ROI instructions to play during calibration.",
+        help="Optional audio file path with ROI instructions to play during calibration.",
     )
 
-    # ROI evaluation similar to calibration (transition + recording per ROI)
     parser.add_argument(
         "--car_eval",
         action="store_true",
         help="Run ROI classification evaluation (transition 2s, record 4s per ROI) to measure classifier accuracy.",
+    )
+
+    parser.add_argument(
+        "--record",
+        type=str,
+        default=None,
+        metavar="",
+        help=(
+            "Record camera output to the specified file or path, including any overlays shown on screen. "
+            "If a single camera is used the argument may be a filename or a directory; "
+            "for multiple cameras the value is treated as a directory and "
+            "separate files named cam0.mp4, cam1.mp4, etc. will be created."
+        ),
     )
 
     # parse the arguments and store them in the args variable dictionary

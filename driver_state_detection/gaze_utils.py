@@ -1,7 +1,9 @@
-import cv2
+from cv2.gapi import mask
 import numpy as np
 from typing import Optional, Tuple, Dict, Any, List
 import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
+from scipy.stats import chi2
 
 
 def angle_from_vector(vec_xy: np.ndarray):
@@ -10,7 +12,7 @@ def angle_from_vector(vec_xy: np.ndarray):
     return (np.degrees(ang_rad) + 360.0) % 360.0
 
 def circular_angle_diff(a, b):
-    d = abs(a - b) % 360.0
+    d = abs(a - b) 
     return min(d, 360.0 - d)
 
 def vec_jitter_std(vecs):
@@ -52,23 +54,7 @@ def select_reliable_eye(left_history, right_history, left_vec, right_vec,
 
     return eye_used, gaze_point, angle
 
-def _get_default_rois():
-    return {
-        "left_mirror":  {"angle": 6.0,   "left_mag": 1.2, "right_mag": 1.2},
-        "right_mirror": {"angle": 188.0, "left_mag": 1.2, "right_mag": 1.2},
-        "radio":        {"angle": 85.0,  "left_mag": 0.8, "right_mag": 0.8},
-        "road":         {"angle": 0.0,   "left_mag": 1.0, "right_mag": 1.0},
-        "lap":          {"angle": 113.0, "left_mag": 0.6, "right_mag": 0.6},
-        "rearmirror":   {"angle": 34.0,  "left_mag": 1.1, "right_mag": 1.1},
-        "left_window":  {"angle": 23.0,  "left_mag": 1.3, "right_mag": 1.3},
-        "right_window": {"angle": 200.0, "left_mag": 1.3, "right_mag": 1.3},
-    }
-
 def classify_by_angle_magnitude(gaze_points, gaze_magnitude, angle_close_thresh=5.0, calibrated_rois = None):
-    """
-    Classify gaze to ROI using angle and magnitude proximity.       
-    Returns: (roi_name, angle_distance)
-    """
     if gaze_points is None:
         return "none", 0.0
 
@@ -77,9 +63,9 @@ def classify_by_angle_magnitude(gaze_points, gaze_magnitude, angle_close_thresh=
 
     # Use calibrated ROIs if provided, otherwise use defaults
     if calibrated_rois is None:
-        ROIs = _get_default_rois()
-    else:
-        ROIs = calibrated_rois
+        return "none", 0.0
+    
+    ROIs = calibrated_rois
 
     left_mag = gaze_magnitude[0]
     right_mag = gaze_magnitude[1]
@@ -137,160 +123,36 @@ def classify_by_point_cluster(gaze_points, calibrated_rois= None):
     return roi, float(distances[roi])
 
 
-def classify_by_angle_magnitude_multicam(gaze_data_list, calibrated_rois_list = None, angle_close_thresh = 5.0):
-    """
-    Algorithm:
-    1. For each camera, compute circular angle difference for all ROIs
-    2. Sum angle differences across cameras for each ROI
-    3. Select top 3 ROIs by summed angle difference
-    4. Among top 3, sum magnitude differences across cameras
-    5. Select ROI with minimum summed magnitude difference
-    """
-    if not gaze_data_list:
-        return "none", 0.0
-
-    # Handle case of single camera ################ 
-    if len(gaze_data_list) == 1:
-        gaze_data = gaze_data_list[0]
-        rois = calibrated_rois_list[0] if calibrated_rois_list else None
-        return classify_by_angle_magnitude(gaze_data["mid_ang"], gaze_data["gaze_magnitude"], angle_close_thresh, rois)
-
-    # Get ROI definitions per camera
-    if calibrated_rois_list is None:
-        calibrated_rois_list = [None] * len(gaze_data_list)
-
-    rois_per_camera = []
-    for rois in calibrated_rois_list:
-        if rois is None:
-            rois_per_camera.append(_get_default_rois())
-        else:
-            rois_per_camera.append(rois)
-
-    # Get all ROI names from first camera (assuming all cameras have same ROI names)
-    roi_names = list(rois_per_camera[0].keys())
-
-    # Sum angle differences across cameras for each ROI
-    summed_angle_dists = {roi: 0.0 for roi in roi_names}
+def classify_by_mahalanobis_distance(gaze_points, calibrated_rois=None):
+    if gaze_points is None or calibrated_rois is None:
+        return "none", float('inf')
     
-    for cam_idx, gaze_data in enumerate(gaze_data_list):
-        if gaze_data is None or gaze_data.get("mid_ang") is None:
-            continue
-        
-        mid_ang = gaze_data["mid_ang"]
-        rois = rois_per_camera[cam_idx]
-        
-        for roi_name in roi_names:
-            angle_diff = circular_angle_diff(mid_ang, rois[roi_name]["angle"])
-            summed_angle_dists[roi_name] += angle_diff
-
-    # Select top 3 ROIs by summed angle difference
-    top3 = sorted(summed_angle_dists.items(), key=lambda kv: kv[1])[:3]
+    gaze_point = np.asarray(gaze_points, dtype=np.float32)
     
-    if not top3:
-        return "none", 0.0
+    gaze_x, gaze_y = float(gaze_point[0]), float(gaze_point[1])
 
-    _, best_summed_angle = top3[0]
-
-    # Filter candidates within angle_close_thresh of best summed angle
-    candidates = [roi for roi, d in top3 if d <= (best_summed_angle + angle_close_thresh)]
-
-    if len(candidates) == 1:
-        roi = candidates[0]
-        return roi, float(summed_angle_dists[roi])
-
-    # Among candidates, sum magnitude differences across cameras
-    summed_mag_dists = {}
+    distances = {}
+    for roi_name, roi_data in calibrated_rois.items():
+        if "mahal_cov" not in roi_data or "centroid_x" not in roi_data or "centroid_y" not in roi_data: 
+            continue
+        
+        median = np.array([roi_data["centroid_x"], roi_data["centroid_y"]], dtype=np.float32)
+        cov = np.asarray(roi_data["mahal_cov"], dtype=np.float32)
+        
+        # Gaze point relative to median
+        diff = np.array([gaze_x, gaze_y], dtype=np.float32) - median
+        
+        cov_inv = np.linalg.inv(cov)
+        mahal_dist = np.sqrt(np.dot(diff, np.dot(cov_inv, diff)))
+        
+        distances[roi_name] = float(mahal_dist)
     
-    for candidate_roi in candidates:
-        total_mag_dist = 0.0
-        
-        for cam_idx, gaze_data in enumerate(gaze_data_list):
-            if gaze_data is None or gaze_data.get("gaze_magnitude") is None:
-                continue
-            
-            gaze_magnitude = gaze_data["gaze_magnitude"]
-            rois = rois_per_camera[cam_idx]
-            
-            left_mag = gaze_magnitude[0]
-            right_mag = gaze_magnitude[1]
-            roi_config = rois[candidate_roi]
-            
-            # Sum absolute magnitude differences for this camera
-            mag_dist = abs(left_mag - roi_config["left_mag"]) + abs(right_mag - roi_config["right_mag"])
-            total_mag_dist += mag_dist
-        
-        summed_mag_dists[candidate_roi] = total_mag_dist
-
-    # Select ROI with minimum summed magnitude distance
-    roi = min(summed_mag_dists, key=summed_mag_dists.get)
-    return roi, float(summed_angle_dists[roi])
-
-
-def classify_by_point_cluster_multicam(gaze_points_list, calibrated_rois_list=None):
-
-    if not gaze_points_list:
+    if not distances:
         return "none", float('inf')
-
-    # Single camera
-    if len(gaze_points_list) == 1:
-        gp = gaze_points_list[0]
-        rois = calibrated_rois_list[0] if calibrated_rois_list else None
-        return classify_by_point_cluster(gp, calibrated_rois=rois)
-
-    # calibrated ROIs per camera
-    if calibrated_rois_list is None:
-        calibrated_rois_list = [None] * len(gaze_points_list)
-
-    # Find first camera that has centroid data to get ROI names
-    roi_names = None
-    for rois in calibrated_rois_list:
-        if rois is not None:
-            roi_names = [k for k, v in rois.items() if "centroid_x" in v and "centroid_y" in v]
-            if roi_names:
-                break
-
-    if not roi_names:
-        return "none", float('inf')
-
-    # Sum distances across cameras for each ROI
-    summed_dists = {roi: 0.0 for roi in roi_names}
-    contrib_counts = {roi: 0 for roi in roi_names}
-
-    for cam_idx, gp in enumerate(gaze_points_list):
-        if gp is None:
-            continue
-
-        rois = calibrated_rois_list[cam_idx] if cam_idx < len(calibrated_rois_list) else None
-        if rois is None:
-            continue
-
-        gp_arr = np.asarray(gp, dtype=np.float32)
-        if gp_arr.size < 2:
-            continue
-        gx, gy = float(gp_arr[0]), float(gp_arr[1])
-
-        for roi in roi_names:
-            roi_data = rois.get(roi, None)
-            if roi_data is None:
-                continue
-            if "centroid_x" not in roi_data or "centroid_y" not in roi_data:
-                continue
-            cx = float(roi_data["centroid_x"])
-            cy = float(roi_data["centroid_y"])
-            dist = np.sqrt((gx - cx) ** 2 + (gy - cy) ** 2)
-            summed_dists[roi] += dist
-            contrib_counts[roi] += 1
-
-    # If no contributions for any ROI, cannot classify
-    if all(contrib_counts[roi] == 0 for roi in roi_names):
-        return "none", float('inf')
-
-    valid_candidates = {r: d for r, d in summed_dists.items() if contrib_counts[r] > 0}
-    if not valid_candidates:
-        return "none", float('inf')
-
-    best_roi = min(valid_candidates, key=valid_candidates.get)
-    return best_roi, float(valid_candidates[best_roi])
+    
+    # Find ROI with minimum Mahalanobis distance
+    roi = min(distances, key=distances.get)
+    return roi, float(distances[roi])
 
 
 def classify_by_corner(gaze_points, iris_points):
@@ -354,8 +216,10 @@ class GazeLogger:
         self._mag_left = []
         self._gaze_points_x = []
         self._gaze_points_y = []
+        self._roi_labels = []  
+        # self._camera_indices = []  
 
-    def log(self, left_ang, right_ang, mid_ang, left_mag, right_mag, time, gaze_points_adj = None):
+    def log(self, left_ang, right_ang, mid_ang, left_mag, right_mag, time, gaze_points_adj = None, roi_label = None):
         if not self.angles and not self.scatter:
             return
         if self.angles:
@@ -370,9 +234,9 @@ class GazeLogger:
             gaze_points_adj = np.asarray(gaze_points_adj, dtype=np.float32)
             self._gaze_points_x.append(gaze_points_adj[0])
             self._gaze_points_y.append(gaze_points_adj[1])
-
-    # def has_samples(self) -> bool:
-    #     return len(self._t) > 0
+            # Extract ROIs and camera indices
+            self._roi_labels.append(roi_label if roi_label is not None else "none")
+            # self._camera_indices.append(camera_idx if camera_idx is not None else -1)
 
     def to_numpy(self):
         t= np.asarray(self._t, dtype=float)
@@ -388,9 +252,6 @@ class GazeLogger:
         return (t, L, R, M)
     
     def print_summary(self, cam_index):
-        # if not self.has_samples():
-        #     print("No gaze samples logged.")
-        #     return
         t, L, R, M = self.to_numpy()
         print(f"\n=== Gaze Angle Summary (Camera {cam_index}) ===")
         print(f"Samples: {len(t)}")
@@ -402,8 +263,6 @@ class GazeLogger:
         print(f"Gaze Magnitude Right Eye: mean:{np.mean(self._mag_right):.4f}, std:{np.std(self._mag_right):.4f}")
 
     def plot(self, cam_index):
-        # if not self.has_samples():
-        #     return
         t, L, R, M = self.to_numpy()
         plt.figure(figsize=(8, 3))
         plt.plot(t, L, label="Left eye")
@@ -417,19 +276,72 @@ class GazeLogger:
         plt.tight_layout()
         plt.show()
 
-    def scatter_plot(self, cam_index):
-        if len(self._gaze_points_x) == 0 or len(self._gaze_points_y) == 0:
-            print("No gaze point samples available for scatter plot.")
-            return
+
+    def scatter_plot(self, cam_index, calibrated_rois=None, show_centroid=False, show_ellipse=False,
+                    colour_per_roi=False, selected_camera=None):
+
+        # get all indices where selected camera is the current camera
+        mask = [i for i, sc in enumerate(selected_camera) if sc is not None and sc == cam_index]
+        gaze_x = [self._gaze_points_x[i] for i in mask]
+        gaze_y = [self._gaze_points_y[i] for i in mask]
+        roi_labels = [self._roi_labels[i] for i in mask] if len(self._roi_labels) == len(self._gaze_points_x) else []
+
+        colours = ['pink', 'lime', 'magenta', 'purple', 'cyan', 'blue', 'green', 'yellow']
+        ##########1left_m#2right_m##shoulder##3road##over_right_shoulder##4rearmirror##5left_window##6right_window
         
         plt.figure(figsize=(8, 6))
-        plt.scatter(self._gaze_points_x, self._gaze_points_y, alpha=0.5, s=20, c=range(len(self._gaze_points_x)), cmap='viridis')
-        plt.colorbar(label="Frame sequence")
         plt.xlabel("X coordinate (pixels)")
         plt.ylabel("Y coordinate (pixels)")
         plt.title(f"Gaze Points Scatter Plot (Camera {cam_index})")
         plt.grid(True, alpha=0.3)
-        plt.gca().invert_yaxis()  # Invert Y-axis to match image coordinates
+
+        if colour_per_roi and calibrated_rois is not None:
+            roi_names=list(calibrated_rois.keys())
+            roi_to_idx={roi: i for i, roi in enumerate(roi_names)}
+
+            # Plot each ROI
+            unique_rois = set(roi_labels)
+            for roi in unique_rois:
+                roi_mask=[i for i, r in enumerate(roi_labels) if r == roi]
+                roi_x=[gaze_x[i] for i in roi_mask]
+                roi_y=[gaze_y[i] for i in roi_mask]
+                colour=colours[roi_to_idx.get(roi, 0) % len(colours)] if roi in roi_to_idx else 'gray'
+                plt.scatter(roi_x,roi_y,alpha=0.5,s=20,c=colour,label=roi)
+            plt.legend(loc='best', fontsize=8)
+
+        else:
+            # colour by time sequence 
+            plt.scatter(gaze_x, gaze_y, alpha=0.5, s=20, c=range(len(gaze_x)), cmap='viridis')
+            plt.colorbar(label="Frame sequence")
+
+
+        # ROI overlays for centroids + ellipses
+        if calibrated_rois is not None:
+            roi_items = list(calibrated_rois.items())
+
+            if show_centroid:
+                for ridx, (rname, rdata) in enumerate(roi_items):
+                    plt.plot(rdata['centroid_x'], rdata['centroid_y'], 
+                             marker='o', color=colours[ridx % len(colours)], 
+                             markersize=10)
+
+            if show_ellipse:
+                for ridx, (rname, rdata) in enumerate(roi_items):
+                    vals, vecs = np.linalg.eigh(rdata['mahal_cov'])
+                    order = vals.argsort()[::-1]
+                    vals = vals[order]
+                    vecs = vecs[:, order]
+
+                    chi2_val = chi2.ppf(0.99, df=2)
+                    ellipse = Ellipse(
+                        xy=(rdata['centroid_x'], rdata['centroid_y']),
+                        width=2 * np.sqrt(vals[0] * chi2_val),
+                        height= 2 * np.sqrt(vals[1] * chi2_val),
+                        angle=np.degrees(np.arctan2(vecs[1, 0], vecs[0, 0])),
+                        edgecolor=colours[ridx % len(colours)], facecolor='none',
+                        linestyle='--',linewidth=2,alpha=0.8)
+                    plt.gca().add_patch(ellipse)
+
         plt.tight_layout()
         plt.show()
 
@@ -455,7 +367,7 @@ class GazeProcessor:
         self.calibrated_rois = calibrated_rois
         self.roi_classifier = roi_classifier
 
-    def process(self, gaze_points, iris_points, gaze_magnitude, pitch, yaw) -> Optional[Dict[str, Any]]:
+    def process(self, gaze_points, iris_points, gaze_magnitude, pitch, yaw):
         if gaze_points is None or iris_points is None:
             return None
 
@@ -488,6 +400,7 @@ class GazeProcessor:
         # Use selected classifier method with the reliable eye data
         roi_cluster, _ = classify_by_point_cluster(mid_pt, calibrated_rois=self.calibrated_rois)
         roi, _ = classify_by_angle_magnitude(mid_ang, gaze_magnitude, calibrated_rois=self.calibrated_rois)
+        roi_mahal, _ = classify_by_mahalanobis_distance(mid_pt, calibrated_rois=self.calibrated_rois)
 
         return {
             "gaze_points_adj": mid_pt,
@@ -498,10 +411,10 @@ class GazeProcessor:
             "mid_ang": mid_ang,
             "corner_name": corner_name,
             "roi": roi,
-            "roi_cluster": roi_cluster, 
+            "roi_cluster": roi_cluster,
+            "roi_mahal": roi_mahal,
             "gaze_magnitude": gaze_magnitude,
         }
-
 
 class CameraPrioritySelector:
     """
@@ -514,10 +427,11 @@ class CameraPrioritySelector:
 
     def select_cameras(self, gaze_results_list, head_poses_list):
         if len(gaze_results_list) <= 1:
-            return [i for i, r in enumerate(gaze_results_list) if r is not None]
+            return 0#[i for i, r in enumerate(gaze_results_list) if r is not None]
 
         scores = []
         for i, (gaze_result, head_pose) in enumerate(zip(gaze_results_list, head_poses_list)):
+            
             if gaze_result is None or head_pose is None:
                 scores.append(0.0)
                 continue
@@ -530,18 +444,17 @@ class CameraPrioritySelector:
             pose_score = 0.7 * pose_score #+ 0.3 
             scores.append(pose_score)
 
-        ##larger score is the chosen camera always
-        ## print if the camera selection changes from the previous frame for debugging
-        if scores[0] > scores[1]: 
+        # larger score is the chosen camera always
+        if scores[0] > scores[1]*1.5: 
             if self.prev_selected != 0:
-                print("Camera 0 prioritized")
-            self.prev_selected = 0
-            return [0]
-        elif scores[1] > scores[0]:
-            if self.prev_selected != 1:
                 print("Camera 1 prioritized")
+            self.prev_selected = 0
+            return 0
+        elif scores[1]*1.5 > scores[0]:
+            if self.prev_selected != 1:
+                print("Camera 2 prioritized")
             self.prev_selected = 1
-            return [1]
+            return 1
         
         ## testing camera always has a priority
 
@@ -567,51 +480,35 @@ class MultiCameraROIClassifier:
         self.calibrated_rois_list = calibrated_rois_list
         self.angle_close_thresh = angle_close_thresh
 
-    def classify(self, gaze_results_list, selected_indices=None, method: Optional[str] = None):
+    def classify(self, gaze_results_list, selected=None, method = None):
         # Filter to selected cameras if provided
-        if selected_indices is not None:
-            filtered_results = [gaze_results_list[i] if i in selected_indices else None for i in range(len(gaze_results_list))]
-        else:
-            filtered_results = gaze_results_list
-
-        # Filter out None results (cameras without landmarks)
-        valid_results = [r for r in filtered_results if r is not None]
+        # if selected is not None:
+        if selected is None:
+            return "none", "none", "none"
+        result= gaze_results_list[selected]
         
-        if not valid_results:
-            return "none", 0.0
+        if result is None:
+            return "none", "none", "none"
 
-        # Build gaze data list for classification
-        gaze_data_list = []
-        valid_indices = []
-        for idx, result in enumerate(filtered_results):
-            if result is not None:
-                gaze_data_list.append({
-                    "mid_ang": result["mid_ang"],
-                    "gaze_magnitude": result.get("gaze_magnitude", None)
-                })
-                valid_indices.append(idx)
+        gaze_data_list = [{
+            "mid_ang": result["mid_ang"],
+            "gaze_magnitude": result.get("gaze_magnitude", None)
+        }]
+        gaze_points_list = [result.get("gaze_points_adj", None)]
 
         # Build calibrated ROIs list for valid cameras
         if self.calibrated_rois_list is None:
             calibrated_rois_subset = None
         else:
-            calibrated_rois_subset = [self.calibrated_rois_list[i] for i in valid_indices]
+            calibrated_rois_subset = self.calibrated_rois_list[selected]
 
-        gaze_points_list = []
-        for idx, result in enumerate(filtered_results):
-            if result is not None:
-                gaze_points_list.append(result.get("gaze_points_adj", None))
-            else:
-                gaze_points_list.append(None)
+        roi_angle, score_angle = classify_by_angle_magnitude(gaze_data_list[0]["mid_ang"], 
+                                                             gaze_data_list[0]["gaze_magnitude"], 
+                                                             self.angle_close_thresh, 
+                                                             calibrated_rois_subset)
 
-        roi_angle, score_angle = classify_by_angle_magnitude_multicam(
-            gaze_data_list,
-            calibrated_rois_list=calibrated_rois_subset,
-            angle_close_thresh=self.angle_close_thresh,
-        )
+        roi_point, score_point=classify_by_point_cluster(gaze_points_list[0], calibrated_rois=calibrated_rois_subset)
 
-        roi_point, score_point = classify_by_point_cluster_multicam(
-            gaze_points_list=[g for g in gaze_points_list if g is not None],
-            calibrated_rois_list=calibrated_rois_subset,
-        )
-        return roi_angle, roi_point
+        roi_mahal, score_mahal = classify_by_mahalanobis_distance(gaze_points_list[0], calibrated_rois=calibrated_rois_subset)
+
+        return roi_angle, roi_point, roi_mahal

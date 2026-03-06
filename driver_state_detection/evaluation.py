@@ -96,10 +96,10 @@ class CornerEvaluator:
 
 
 class CarEvaluator:
-    def __init__(self, roi_duration=4.0, transition_duration=2.0, roi_names=None, audio_file=None, ear_thresh=0.2):
+    def __init__(self, roi_duration=4.0, transition_duration=2.0, roi_names=None, audio_file=None, ear_thresh=0.1):
         self.roi_duration = float(roi_duration)
         self.transition_duration = float(transition_duration)
-        self.roi_names = roi_names or ["left_mirror", "right_mirror", "radio", "road", "lap", "rearmirror", "left_window", "right_window"]
+        self.roi_names = roi_names or ["left_mirror", "right_mirror", "over_left_shoulder", "road", "over_right_shoulder", "rearmirror", "left_window", "right_window"]
         self.roi_index = 0
         self.in_transition = False
         self.segment_start_time = None
@@ -114,7 +114,8 @@ class CarEvaluator:
         
         self.classifations = {
             "proximity": ([], []),
-            "point_proximity": ([], [])
+            "point_proximity": ([], []),
+            "mahalanobis": ([], [])
         }
 
     def start(self):
@@ -172,11 +173,13 @@ class CarEvaluator:
         if gaze_result is not None and true_roi is not None and not eye_closed:
             roi_angle = gaze_result.get("roi", None)
             roi_point = gaze_result.get("roi_cluster", None)
+            roi_mahal = gaze_result.get("roi_mahal", None)
             self.add_classifier("proximity", true_roi, roi_angle, true_roi)
             self.add_classifier("point_proximity", true_roi, roi_point, true_roi)
-    ## ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ##
+            self.add_classifier("mahalanobis", true_roi, roi_mahal, true_roi)
         if elapsed >= self.roi_duration:
             self.roi_index += 1
+            print(f"Transitioning to next ROI: {self.get_current_roi()}")
             if self.roi_index >= len(self.roi_names):
                 self.stop_audio()
                 return True
@@ -201,6 +204,8 @@ class CarEvaluator:
                 print("\n=============== PROXIMITY CLASSIFIER (angle + magnitude) ===============")
             elif classifier_name == "point_proximity":
                 print("\n=============== POINT PROXIMITY CLASSIFIER (gaze point centroid distance) ===============")
+            elif classifier_name == "mahalanobis":
+                print("\n=============== MAHALANOBIS CLASSIFIER (Mahalanobis distance) ===============")
 
             # Per-ROI accuracy
             print("\nROI accuracy:")
