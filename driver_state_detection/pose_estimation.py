@@ -149,9 +149,9 @@ class HeadPoseEstimator:
         nose_y = tuple(nose_axes_point2D[1, 0].astype(int))
         nose_z = tuple(nose_axes_point2D[2, 0].astype(int))
 
-        cv2.line(frame, nose, nose_x, (255, 0, 0), 2)
-        cv2.line(frame, nose, nose_y, (0, 255, 0), 2)
-        cv2.line(frame, nose, nose_z, (0, 0, 255), 2)
+        # cv2.line(frame, nose, nose_x, (255, 0, 0), 2)
+        # cv2.line(frame, nose, nose_y, (0, 255, 0), 2)
+        # cv2.line(frame, nose, nose_z, (0, 0, 255), 2)
 
     def _get_camera_parameters(self, frame_size):
         fr_w = frame_size[0]
