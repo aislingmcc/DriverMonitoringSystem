@@ -525,8 +525,8 @@ def main():
                 # logging for scatter/angle if enabled
                 if gaze_logger.angles or gaze_logger.scatter:
                     elapsed = time.time() - start_time
-                    
-                    gaze_logger.log(left_ang, right_ang, mid_ang, left_mag, right_mag, elapsed, gaze_points_adj=gp_adj, roi_label=roi_eval.get_current_roi())
+                    roi_label = roi_eval.get_current_roi() if roi_eval is not None else None
+                    gaze_logger.log(left_ang, right_ang, mid_ang, left_mag, right_mag, elapsed, gaze_points_adj=gp_adj, roi_label=roi_label)
                     if gaze_logger.angles:
                         cv2.putText(frame, f"L:{left_ang:.1f}  R:{right_ang:.1f}  M:{mid_ang:.1f}",
                                     (10, 205), cv2.FONT_HERSHEY_PLAIN, 1.3, (180, 255, 180), 2)
