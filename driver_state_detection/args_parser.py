@@ -232,11 +232,31 @@ def get_args():
         default=None,
         metavar="",
         help=(
-            "Record camera output to the specified file or path, including any overlays shown on screen. "
-            "If a single camera is used the argument may be a filename or a directory; "
-            "for multiple cameras the value is treated as a directory and "
-            "separate files named cam0.mp4, cam1.mp4, etc. will be created."
+            "Record camera output to the specified file or path."
         ),
+    )
+
+    parser.add_argument(
+        "--live_graph",
+        action="store_true",
+        help="Enable visualization of ROI classification over time",
+    )
+
+    parser.add_argument(
+        "--live_graph_classifiers",
+        type=str,
+        nargs='+',
+        default=["angle", "centroid"],
+        metavar="",
+        help="Types of graphs available 'angle' (angle+magnitude), 'centroid' (point proximity)",
+    )
+
+    parser.add_argument(
+        "--live_graph_history",
+        type=int,
+        default=60,
+        metavar="",
+        help="Duration of data history displayed on the graph",
     )
 
     # parse the arguments and store them in the args variable dictionary

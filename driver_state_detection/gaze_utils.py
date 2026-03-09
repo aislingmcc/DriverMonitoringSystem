@@ -54,11 +54,11 @@ def select_reliable_eye(left_history, right_history, left_vec, right_vec,
 
     return eye_used, gaze_point, angle
 
-def classify_by_angle_magnitude(gaze_points, gaze_magnitude, angle_close_thresh=5.0, calibrated_rois = None):
-    if gaze_points is None:
+def classify_by_angle_magnitude(gaze_angle, gaze_magnitude, angle_close_thresh=5.0, calibrated_rois = None):
+    if gaze_angle is None:
         return "none", 0.0
 
-    gaze_angle = np.asarray(gaze_points, dtype=np.float32)
+    gaze_angle = np.asarray(gaze_angle, dtype=np.float32)
     gaze_magnitude = np.asarray(gaze_magnitude, dtype=np.float32)
 
     # Use calibrated ROIs if provided, otherwise use defaults
@@ -80,21 +80,17 @@ def classify_by_angle_magnitude(gaze_points, gaze_magnitude, angle_close_thresh=
 
     if len(candidates) == 1:
         roi = candidates[0]
-        return roi, float(angle_dists[roi])
+        return roi, gaze_angle #float(angle_dists[roi])
 
     # Break tie using magnitude distance
     roi = min(candidates, key=lambda r: (abs(left_mag - ROIs[r]["left_mag"]) + abs(right_mag - ROIs[r]["right_mag"])))
-    return roi, float(angle_dists[roi])
-
+    return roi, (gaze_angle*.7+(gaze_magnitude[0]*+gaze_magnitude[1])*.3*360/60)
 
 def classify_by_point_cluster(gaze_points, calibrated_rois= None):
     if gaze_points is None:
-        return "none", float('inf')
+        return "none", 0.0
 
     gaze_point = np.asarray(gaze_points, dtype=np.float32)
-    if len(gaze_point) < 2:
-        return "none", float('inf')
-    
     gaze_x, gaze_y = float(gaze_point[0]), float(gaze_point[1])
 
     # Use calibrated ROIs if provided, otherwise cannot classify
@@ -413,7 +409,7 @@ class GazeProcessor:
             "roi": roi,
             "roi_cluster": roi_cluster,
             "roi_mahal": roi_mahal,
-            "gaze_magnitude": gaze_magnitude,
+            "gaze_magnitude": gaze_magnitude
         }
 
 class CameraPrioritySelector:
@@ -484,11 +480,11 @@ class MultiCameraROIClassifier:
         # Filter to selected cameras if provided
         # if selected is not None:
         if selected is None:
-            return "none", "none", "none"
+            return "none", 0.0, "none", 0.0, "none"
         result= gaze_results_list[selected]
         
         if result is None:
-            return "none", "none", "none"
+            return "none", 0.0, "none", 0.0, "none"
 
         gaze_data_list = [{
             "mid_ang": result["mid_ang"],
@@ -511,4 +507,4 @@ class MultiCameraROIClassifier:
 
         roi_mahal, score_mahal = classify_by_mahalanobis_distance(gaze_points_list[0], calibrated_rois=calibrated_rois_subset)
 
-        return roi_angle, roi_point, roi_mahal
+        return roi_angle, score_angle, roi_point, score_point, roi_mahal

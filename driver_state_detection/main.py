@@ -15,6 +15,7 @@ from pose_estimation import HeadPoseEstimator as HeadPoseEst
 from utils import get_landmarks, load_camera_parameters
 import matplotlib.pyplot as plt
 from gaze_utils import GazeProcessor, GazeLogger, MultiCameraROIClassifier, CameraPrioritySelector
+from roi_live_graph import ROILiveGraph
 from calibration import Calibration
 from video_recorder import VideoRecorder
 
@@ -346,6 +347,17 @@ def main():
     # Create gaze loggers
     gaze_loggers = [GazeLogger(angles=getattr(args, "angles", False), scatter=getattr(args, "scatter", False)) for _ in caps]
 
+    live_graph = None
+    if getattr(args, "live_graph", False):
+        classifiers = getattr(args, "live_graph_classifiers", ["angle", "centroid"])
+        history_duration = getattr(args, "live_graph_history", 30)
+        live_graph = ROILiveGraph(
+            history_duration=history_duration,
+            classification_types=classifiers,
+            calibrated_rois=calibrated_rois_list[0] if calibrated_rois_list and calibrated_rois_list[0] else None
+        )
+        live_graph.start()
+
     # Create AttentionScorer instances
     scorers = []
     for _ in caps:
@@ -610,8 +622,13 @@ def main():
         selected = camera_priority_selector.select_cameras(gaze_results_current, head_poses_current)
         if selected is not None:
             selected_camera_list.append(selected+1)
-        prev_fusion_roi, prev_fusion_roi_point, prev_fusion_roi_mahal = \
+        prev_fusion_roi, angle_score, prev_fusion_roi_point, point_score, prev_fusion_roi_mahal= \
             multicam_roi_classifier.classify(gaze_results_current, selected=selected)
+
+        # Update live graph
+        if live_graph is not None:
+            live_graph.add_data_point(current_time=t_now,angle_score=angle_score,
+                centroid_score=point_score,camera_idx=selected)
 
         # when not facial landmarks are detected
         if gaze is None:
@@ -692,6 +709,11 @@ def main():
     # Print ROI evaluation results 
     if roi_evaluator is not None:
         roi_evaluator.print_results()
+
+    # Cleanup live graph
+    if live_graph is not None:
+        live_graph.stop()
+        print("Live graph closed")
 
     # destroy all windows
     if recorder:
