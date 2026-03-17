@@ -87,20 +87,11 @@ class Calibration:
                 # print(f"Centroid for {roi_name}: ({centroid_x}, {centroid_y})")
                 roi_data["centroid_x"] = centroid_x
                 roi_data["centroid_y"] = centroid_y
-                
-                # Compute mean and covariance for Mahalanobis distance classification
-                # mean_x = float(np.mean(gaze_points_array[:, 0]))
-                # mean_y = float(np.mean(gaze_points_array[:, 1]))
-                # roi_data["mahal_mean"] = [mean_x, mean_y]
 
                 # Compute covariance matrix
                 if len(gaze_points_array) >= 2:
                     cov_matrix = np.cov(gaze_points_array.T)
                     roi_data["mahal_cov"] = cov_matrix.tolist()
-                # else:
-                #     print("this can't be deleted 4")
-                #     # Fallback for single point: use identity matrix
-                #     roi_data["mahal_cov"] = [[1.0, 0.0], [0.0, 1.0]]
 
             self.calibration_data[roi_name] = roi_data
 
@@ -175,11 +166,9 @@ class AudioPlayer:
         self.playback_thread.start()
 
     def _play_audio(self):
-        # try:
         subprocess.Popen(["ffplay", "-nodisp", "-autoexit", self.audio_file])
         return
-        # except FileNotFoundError:
-        #     pass
+
 
     def stop(self):
         self.is_playing = False

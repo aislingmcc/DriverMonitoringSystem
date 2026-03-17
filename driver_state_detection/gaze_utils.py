@@ -1,6 +1,5 @@
 from cv2.gapi import mask
 import numpy as np
-from typing import Optional, Tuple, Dict, Any, List
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 from scipy.stats import chi2
@@ -84,7 +83,7 @@ def classify_by_angle_magnitude(gaze_angle, gaze_magnitude, angle_close_thresh=5
 
     # Break tie using magnitude distance
     roi = min(candidates, key=lambda r: (abs(left_mag - ROIs[r]["left_mag"]) + abs(right_mag - ROIs[r]["right_mag"])))
-    return roi, (gaze_angle*.7+(gaze_magnitude[0]*+gaze_magnitude[1])*.3*360/60)
+    return roi, (gaze_angle*.7+(gaze_magnitude[0]*+gaze_magnitude[1])*.3*360/40)
 
 def classify_by_point_cluster(gaze_points, calibrated_rois= None):
     if gaze_points is None:

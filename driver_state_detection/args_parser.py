@@ -243,12 +243,9 @@ def get_args():
     )
 
     parser.add_argument(
-        "--live_graph_classifiers",
-        type=str,
-        nargs='+',
-        default=["angle", "centroid"],
-        metavar="",
-        help="Types of graphs available 'angle' (angle+magnitude), 'centroid' (point proximity)",
+        "--return_graph",
+        action="store_true",
+        help="Show a final graph of all collected ROI classification data (with ROI reference lines) after recording, even if --live_graph is not enabled.",
     )
 
     parser.add_argument(
@@ -257,6 +254,12 @@ def get_args():
         default=60,
         metavar="",
         help="Duration of data history displayed on the graph",
+    )
+
+    parser.add_argument(
+        "--live_graph_normalise",
+        action="store_true",
+        help="Enable normalized ROI metric visualization. Converts distances to confidence-based scores positioned at ROI y-coordinates.",
     )
 
     # parse the arguments and store them in the args variable dictionary

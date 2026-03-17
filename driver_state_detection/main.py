@@ -291,7 +291,6 @@ def main():
     cam_indices = []
     num_cams = 0
 
-    # when --video file is provided
     if getattr(args, "video", None):
         video_path = args.video
         
@@ -348,16 +347,19 @@ def main():
     gaze_loggers = [GazeLogger(angles=getattr(args, "angles", False), scatter=getattr(args, "scatter", False)) for _ in caps]
 
     live_graph = None
-    if getattr(args, "live_graph", False):
-        classifiers = getattr(args, "live_graph_classifiers", ["angle", "centroid"])
-        history_duration = getattr(args, "live_graph_history", 30)
+    return_graph = getattr(args, "return_graph", False)
+    if getattr(args, "live_graph", False) or return_graph:
+        # If return_graph is enabled, keep the full history 
+        history_duration = getattr(args, "live_graph_history", 60)
+        normalise = getattr(args, "live_graph_normalise", False)
+        
         live_graph = ROILiveGraph(
             history_duration=history_duration,
-            classification_types=classifiers,
-            calibrated_rois=calibrated_rois_list[0] if calibrated_rois_list and calibrated_rois_list[0] else None
+            roi_list=calibrated_rois_list,
+            normalise=normalise
         )
-        live_graph.start()
-
+        if getattr(args, "live_graph", False):
+            live_graph.start()
     # Create AttentionScorer instances
     scorers = []
     for _ in caps:
@@ -627,8 +629,7 @@ def main():
 
         # Update live graph
         if live_graph is not None:
-            live_graph.add_data_point(current_time=t_now,angle_score=angle_score,
-                centroid_score=point_score,camera_idx=selected)
+            live_graph.add_data_point(current_time=t_now,angle_score=angle_score,camera_idx=selected)
 
         # when not facial landmarks are detected
         if gaze is None:
@@ -710,10 +711,13 @@ def main():
     if roi_evaluator is not None:
         roi_evaluator.print_results()
 
-    # Cleanup live graph
+    # Cleanup and display live graph
     if live_graph is not None:
-        live_graph.stop()
-        print("Live graph closed")
+        if getattr(args, "return_graph", False):
+            live_graph.show_full()
+        else:
+            live_graph.stop()
+            print("Live graph closed")
 
     # destroy all windows
     if recorder:
