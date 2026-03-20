@@ -420,56 +420,75 @@ class CameraPrioritySelector:
         self.priority_threshold = priority_threshold
         self.prev_selected = None
 
+    # def select_cameras(self, gaze_results_list, head_poses_list):
+    #     if len(gaze_results_list) <= 1:
+    #         return 0#[i for i, r in enumerate(gaze_results_list) if r is not None]
+
+    #     scores = []
+    #     for i, (gaze_result, head_pose) in enumerate(zip(gaze_results_list, head_poses_list)):
+            
+    #         if gaze_result is None or head_pose is None:
+    #             scores.append(0.0)
+    #             continue
+            
+    #         # Head pose: lower values better (frontal view) 
+    #         roll, pitch, yaw = head_pose
+    #         pose_score = 1.0 / (1.0 + abs(roll) + abs(pitch) + abs(yaw))  # Higher is better
+    #         # may need to be adjusted for car setup
+
+    #         pose_score = 0.7 * pose_score #+ 0.3 
+    #         scores.append(pose_score)
+
+    #     # larger score is the chosen camera always
+    #     if scores[0] > scores[1]*1.5: 
+    #         if self.prev_selected != 0:
+    #             print("Camera 1 prioritized")
+    #         self.prev_selected = 0
+    #         return 0
+    #     elif scores[1]*1.5 > scores[0]:
+    #         if self.prev_selected != 1:
+    #             print("Camera 2 prioritized")
+    #         self.prev_selected = 1
+    #         return 1
+
     def select_cameras(self, gaze_results_list, head_poses_list):
         if len(gaze_results_list) <= 1:
-            return 0#[i for i, r in enumerate(gaze_results_list) if r is not None]
+            return 0
 
         scores = []
         for i, (gaze_result, head_pose) in enumerate(zip(gaze_results_list, head_poses_list)):
-            
+
             if gaze_result is None or head_pose is None:
                 scores.append(0.0)
                 continue
-            
+
             # Head pose: lower values better (frontal view) 
             roll, pitch, yaw = head_pose
-            pose_score = 1.0 / (1.0 + abs(roll) + abs(pitch) + abs(yaw))  # Higher is better
-            # may need to be adjusted for car setup
+            pose_score = 1.0 / (1.0 + abs(roll) + abs(pitch) + abs(yaw))
+            pose_score = 0.7 * pose_score
 
-            pose_score = 0.7 * pose_score #+ 0.3 
             scores.append(pose_score)
 
-        # larger score is the chosen camera always
-        if scores[0] > scores[1]*1.5: 
+        buffer = 0.05  # minimum score difference to switch cameras
+        score0 = scores[0]
+        score1 = scores[1] * 1.5
+
+        diff = score0 - score1
+
+        # switching only if difference is large
+        if diff > buffer:
             if self.prev_selected != 0:
                 print("Camera 1 prioritized")
             self.prev_selected = 0
-            return 0
-        elif scores[1]*1.5 > scores[0]:
+
+        elif diff < -buffer:
             if self.prev_selected != 1:
                 print("Camera 2 prioritized")
             self.prev_selected = 1
-            return 1
+
+        # use previous camera for close to avoid jitter
+        return self.prev_selected
         
-        ## testing camera always has a priority
-
-        # Find valid cameras (those with results)
-        # valid_cameras = [i for i, score in enumerate(scores) if score > 0]
-
-        # # Sort by score descending
-        # sorted_valid = sorted(valid_cameras, key=lambda i: scores[i], reverse=True)
-        # best_score = scores[sorted_valid[0]]
-        # second_score = scores[sorted_valid[1]] if len(sorted_valid) > 1 else 0
-
-        # # Check if significant difference between best and second
-        # if best_score > second_score * (1 + self.priority_threshold):
-        #     print("Camera ", sorted_valid[0], " prioritized for fusion")
-        #     return [sorted_valid[0]]
-        # else:
-        #     return sorted_valid
-
-
-
 class MultiCameraROIClassifier:
     def __init__(self, calibrated_rois_list= None, angle_close_thresh = 5.0):
         self.calibrated_rois_list = calibrated_rois_list
