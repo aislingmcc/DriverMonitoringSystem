@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 from scipy.stats import chi2
+import time
 
 
 def angle_from_vector(vec_xy: np.ndarray):
@@ -24,6 +25,45 @@ def vec_jitter_std(vecs):
     ]
     return float(np.std(diffs))
 
+import numpy as np
+
+def _history_to_array(history):
+    if history is None or len(history) == 0:
+        return None
+    arr = np.asarray(history, dtype=np.float32)
+    if arr.ndim == 1:
+        arr = arr.reshape(1, -1)
+    return arr
+
+
+def hampel_filter_final_vector(current_vec, history, n_sigma=3.0, min_history=5):
+    current_vec = np.asarray(current_vec, dtype=np.float32)
+    hist = _history_to_array(history)
+
+    if hist is None or len(hist) < min_history:
+        return current_vec, False, current_vec, 0.0, np.inf
+
+    # Robust center from recent final gaze vectors
+    center_vec = np.median(hist, axis=0).astype(np.float32)
+
+    # Distance of each history sample from the center
+    dists = np.linalg.norm(hist - center_vec, axis=1)
+
+    med_dist = np.median(dists)
+    mad = np.median(np.abs(dists - med_dist))
+
+    current_dist = np.linalg.norm(current_vec - center_vec)
+
+    if mad < 1e-8:
+        threshold = med_dist + 1e-3
+    else:
+        robust_sigma = 1.4826 * mad
+        threshold = med_dist + n_sigma * robust_sigma
+
+    is_outlier = current_dist > threshold
+    filtered_vec = center_vec if is_outlier else current_vec
+
+    return filtered_vec, is_outlier, center_vec, current_dist, threshold
 
 def select_reliable_eye(left_history, right_history, left_vec, right_vec, 
                        iris_points, gp_adj,std_threshold=5.0, ratio_threshold=2.0):
@@ -35,11 +75,13 @@ def select_reliable_eye(left_history, right_history, left_vec, right_vec,
         eye_used = "right"
         gaze_vec = right_vec
         gaze_point = gp_adj[1]
+        final_gaze_history = right_history
 
     elif right_std > left_std * ratio_threshold and right_std > std_threshold:
         eye_used = "left"
         gaze_vec = left_vec
         gaze_point = gp_adj[0]
+        final_gaze_history = left_history
 
     else:
         eye_used = "blend"
@@ -48,10 +90,34 @@ def select_reliable_eye(left_history, right_history, left_vec, right_vec,
         norm = np.linalg.norm(gaze_vec) + 1e-8
         gaze_vec = gaze_vec / norm
         gaze_point = 0.5 * (gp_adj[0] + gp_adj[1])
+        final_gaze_history=combine_histories(left_history,right_history)
+    
+    hampel_n_sigma = 3
+    hampel_min_history=5
 
-    angle = angle_from_vector(gaze_vec)
+    gaze_vector, is_outlier, center_vec, current_dist, threshold = hampel_filter_final_vector(gaze_vec,
+                                                    final_gaze_history,
+                                                    n_sigma=hampel_n_sigma,
+                                                    min_history=hampel_min_history
+                                                )
+
+
+    angle = angle_from_vector(gaze_vector)
 
     return eye_used, gaze_point, angle
+
+def combine_histories(left_history, right_history):
+    if len(left_history) == 0:
+        return list(right_history)
+    if len(right_history) == 0:
+        return list(left_history)
+
+    n = min(len(left_history), len(right_history))
+    left_arr = np.asarray(left_history[-n:], dtype=np.float32)
+    right_arr = np.asarray(right_history[-n:], dtype=np.float32)
+
+    blended = 0.5 * (left_arr + right_arr)
+    return list(blended)
 
 def classify_by_angle_magnitude(gaze_angle, gaze_magnitude, angle_close_thresh=5.0, calibrated_rois = None):
     if gaze_angle is None:
@@ -420,37 +486,6 @@ class CameraPrioritySelector:
         self.priority_threshold = priority_threshold
         self.prev_selected = None
 
-    # def select_cameras(self, gaze_results_list, head_poses_list):
-    #     if len(gaze_results_list) <= 1:
-    #         return 0#[i for i, r in enumerate(gaze_results_list) if r is not None]
-
-    #     scores = []
-    #     for i, (gaze_result, head_pose) in enumerate(zip(gaze_results_list, head_poses_list)):
-            
-    #         if gaze_result is None or head_pose is None:
-    #             scores.append(0.0)
-    #             continue
-            
-    #         # Head pose: lower values better (frontal view) 
-    #         roll, pitch, yaw = head_pose
-    #         pose_score = 1.0 / (1.0 + abs(roll) + abs(pitch) + abs(yaw))  # Higher is better
-    #         # may need to be adjusted for car setup
-
-    #         pose_score = 0.7 * pose_score #+ 0.3 
-    #         scores.append(pose_score)
-
-    #     # larger score is the chosen camera always
-    #     if scores[0] > scores[1]*1.5: 
-    #         if self.prev_selected != 0:
-    #             print("Camera 1 prioritized")
-    #         self.prev_selected = 0
-    #         return 0
-    #     elif scores[1]*1.5 > scores[0]:
-    #         if self.prev_selected != 1:
-    #             print("Camera 2 prioritized")
-    #         self.prev_selected = 1
-    #         return 1
-
     def select_cameras(self, gaze_results_list, head_poses_list):
         if len(gaze_results_list) <= 1:
             return 0
@@ -464,6 +499,7 @@ class CameraPrioritySelector:
 
             # Head pose: lower values better (frontal view) 
             roll, pitch, yaw = head_pose
+            # score higher value better
             pose_score = 1.0 / (1.0 + abs(roll) + abs(pitch) + abs(yaw))
             pose_score = 0.7 * pose_score
 
@@ -475,15 +511,19 @@ class CameraPrioritySelector:
 
         diff = score0 - score1
 
+        # initialize to the highest-scoring camera on first frame
+        if self.prev_selected is None:
+            self.prev_selected = 0 if score0 >= score1 else 1
+
         # switching only if difference is large
-        if diff > buffer:
+        if diff > buffer or scores[1]== 0.0 or scores[1]==0.7:
             if self.prev_selected != 0:
-                print("Camera 1 prioritized")
+                print(time.time(),": Camera 1 prioritized")
             self.prev_selected = 0
 
-        elif diff < -buffer:
+        elif diff < -buffer or scores[0] == 0.0 or scores[0]==0.7:
             if self.prev_selected != 1:
-                print("Camera 2 prioritized")
+                print(time.time(), ": Camera 2 prioritized")
             self.prev_selected = 1
 
         # use previous camera for close to avoid jitter

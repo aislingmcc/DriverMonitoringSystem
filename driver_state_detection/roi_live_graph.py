@@ -39,13 +39,27 @@ class ROILiveGraph:
         self.is_running = False
     
     def roi_ordering(self):
+        if not self.roi_list or self.current_camera_idx is None or not (0 <= self.current_camera_idx < len(self.roi_list)):
+            return []
+
         calibrated_rois = self.roi_list[self.current_camera_idx]
-        roi_angles = [(roi, data['angle']) for roi, data in calibrated_rois.items()]
+        if not calibrated_rois:
+            return []
+
+        roi_angles = []
+        for roi, data in calibrated_rois.items():
+            angle = data.get('angle') if isinstance(data, dict) else None
+            if angle is not None:
+                roi_angles.append((roi, angle))
+
         roi_angles.sort(key=lambda x: x[1])
         # returns roi and angle smallest to largest
         return roi_angles
 
     def normalise(self, value):
+        if value is None or not self.roi_ordered_angles:
+            return None
+        
         # valid angle range
         value = max(0.0, min(360.0, value))
 
@@ -81,8 +95,21 @@ class ROILiveGraph:
         if self.start_time is None:
             self.start_time = current_time
             self.last_roi_change_time = 0
-            self.current_camera_idx = camera_idx
-            self.roi_ordered_angles= self.roi_ordering()
+
+            if camera_idx is not None and self.roi_list and 0 <= camera_idx < len(self.roi_list) and self.roi_list[camera_idx]:
+                self.current_camera_idx = camera_idx
+            elif self.roi_list:
+                # fallback to first valid calibrated camera if available
+                for idx, roi in enumerate(self.roi_list):
+                    if roi:
+                        self.current_camera_idx = idx
+                        break
+                else:
+                    self.current_camera_idx = None
+            else:
+                self.current_camera_idx = None
+
+            self.roi_ordered_angles = self.roi_ordering()
 
         # update lines for current camera
         if camera_idx is not None and self.roi_list:
@@ -96,7 +123,7 @@ class ROILiveGraph:
                             self.roi_line_segments[roi][-1]=(self.roi_line_segments[roi][-1][0], relative_time, self.roi_line_segments[roi][-1][2])
                 
                 # switch to calibration for new camera
-                if 0 <= camera_idx < len(self.roi_list):
+                if 0 <= camera_idx < len(self.roi_list) and self.roi_list[camera_idx]:
                     self.calibrated_rois = self.roi_list[camera_idx]
                     self.current_camera_idx = camera_idx
                     self.roi_ordered_angles = self.roi_ordering()
@@ -120,26 +147,30 @@ class ROILiveGraph:
         
         # initialise roi lines
         if not any(self.roi_line_segments.values()):
-            for roi in self.roi_colours.keys():
-                if self.roi_list and roi in self.roi_list[self.current_camera_idx]:
-                    if self.normalised:
-                        for idx, (r, _) in enumerate(self.roi_ordered_angles, start=1):
-                            if r == roi:
-                                y_value = idx
-                                break
+            if self.roi_list and self.current_camera_idx is not None and 0 <= self.current_camera_idx < len(self.roi_list):
+                for roi in self.roi_colours.keys():
+                    if self.roi_list[self.current_camera_idx] and roi in self.roi_list[self.current_camera_idx]:
+                        if self.normalised:
+                            for idx, (r, _) in enumerate(self.roi_ordered_angles, start=1):
+                                if r == roi:
+                                    y_value = idx
+                                    break
+                            else:
+                                y_value = None
                         else:
-                            y_value = None
-                    else:
-                        roi_data=self.roi_list[self.current_camera_idx][roi]
-                        y_value=(roi_data.get('angle', 0.0)*.7+(roi_data.get('left_mag',0.0)+roi_data.get('right_mag', 0.0))*.3*360/40)
-                    if y_value is not None:
-                        self.roi_line_segments[roi].append((0, None, y_value))
+                            roi_data=self.roi_list[self.current_camera_idx][roi]
+                            y_value=(roi_data.get('angle', 0.0)*.7+(roi_data.get('left_mag',0.0)+roi_data.get('right_mag', 0.0))*.3*360/40)
+                        if y_value is not None:
+                            self.roi_line_segments[roi].append((0, None, y_value))
         
         if self.normalised:
             angle_value = self.normalise(angle_score)
         else:
             angle_value = angle_score
-        
+
+        if angle_value is None:
+            angle_value = float('nan')
+
         self.data_buffer['times'].append(relative_time)
         self.data_buffer['values'].append(angle_value)
         self.data_buffer['cameras'].append(camera_idx)

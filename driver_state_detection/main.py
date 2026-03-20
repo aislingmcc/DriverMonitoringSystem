@@ -424,6 +424,7 @@ def main():
         t_now = time.perf_counter()
         elapsed_time = t_now - prev_time
         prev_time = t_now
+        no_gaze_present=True
         if elapsed_time > 0:
             fps = np.round(1 / elapsed_time, 3)
 
@@ -494,8 +495,7 @@ def main():
                 ear_current[i] = ear
                 
                 # Compute gaze result for current frame
-                if gaze_points is not None and iris_points is not None:
-                    gaze_result = gaze_processors[i].process(gaze_points, iris_points, gaze_magnitude, pitch, yaw)
+                gaze_result = gaze_processors[i].process(gaze_points, iris_points, gaze_magnitude, pitch, yaw)
             
             # Store current gaze result for next iteration fusion
             gaze_results_current[i] = gaze_result
@@ -530,12 +530,6 @@ def main():
                 gp_adj = gaze_result["gaze_points_adj"]
                 point_roi = gaze_result["roi_cluster"]
 
-                # Display previous frame info   
-                if prev_fusion_roi is not None:
-                    cv2.putText(frame, f"Point ROI: {prev_fusion_roi_point}", (10, 350), cv2.FONT_HERSHEY_PLAIN, 2, (0,255,0), 2)
-                    cv2.putText(frame, f"Angle ROI: {prev_fusion_roi}", (10, 320), cv2.FONT_HERSHEY_PLAIN, 2, (0,255,0), 2)
-                    cv2.putText(frame, f"Mahalanobis ROI: {prev_fusion_roi_mahal}", (10, 380), cv2.FONT_HERSHEY_PLAIN, 2, (0,255,0), 2)
-
                 # logging for scatter/angle if enabled
                 if gaze_logger.angles or gaze_logger.scatter:
                     elapsed = time.time() - start_time
@@ -566,6 +560,7 @@ def main():
             if gaze is not None:
                 cv2.putText(frame, "Gaze Score:" + str(round(gaze, 3)), (10, 80), cv2.FONT_HERSHEY_PLAIN, 2, (155, 255, 22), 1, cv2.LINE_AA)
                 cv2.putText(frame, "PERCLOS:" + str(round(perclos_score, 3)), (10, 110), cv2.FONT_HERSHEY_PLAIN, 2, (155, 255, 22), 1, cv2.LINE_AA)
+                no_gaze_present=False
 
             if roll is not None:
                 cv2.putText(frame, "roll:" + str(roll.round(1)[0]), (450, 40), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
@@ -573,6 +568,12 @@ def main():
                 cv2.putText(frame, "pitch:" + str(pitch.round(1)[0]), (450, 70), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
             if yaw is not None:
                 cv2.putText(frame, "yaw:" + str(yaw.round(1)[0]), (450, 100), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
+
+            # Display previous frame info   
+            if prev_fusion_roi is not None:
+                cv2.putText(frame, f"Point ROI: {prev_fusion_roi_point}", (10, 350), cv2.FONT_HERSHEY_PLAIN, 2, (0,255,0), 2)
+                cv2.putText(frame, f"Angle ROI: {prev_fusion_roi}", (10, 320), cv2.FONT_HERSHEY_PLAIN, 2, (0,255,0), 2)
+                cv2.putText(frame, f"Mahalanobis ROI: {prev_fusion_roi_mahal}", (10, 380), cv2.FONT_HERSHEY_PLAIN, 2, (0,255,0), 2)
 
             # if tired:
             #     cv2.putText(frame, "TIRED!", (10, 280), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
@@ -620,6 +621,7 @@ def main():
 
             cv2.imshow(f"Camera {cam_indices[i]} - Press 'q' to terminate", frame)
 
+        # print("prev fusion before: ", prev_fusion_roi)
         # compute fusion result (angle+magnitude, point cluster, and mahalanobis)
         selected = camera_priority_selector.select_cameras(gaze_results_current, head_poses_current)
         if selected is not None:
@@ -632,13 +634,12 @@ def main():
             live_graph.add_data_point(current_time=t_now,angle_score=angle_score,camera_idx=selected)
 
         # when not facial landmarks are detected
-        if gaze is None:
+        if no_gaze_present:
             # use last valid yaw from any camera
             valid_yaws = [(i, yaw) for i, yaw in enumerate(last_yaw_current) if yaw is not None]
+            # print(valid_yaws)
             if valid_yaws:
-                _, last_yaw = valid_yaws[0]
-                if isinstance(last_yaw, np.ndarray):
-                    last_yaw = last_yaw[0]
+                cam_idx, last_yaw = max(valid_yaws, key=lambda x: abs(x[1]))
                 # Positive yaw =? looking over right shoulder, Negative yaw => looking over left shoulder
                 if last_yaw > 0:
                     prev_fusion_roi = "over_right_shoulder"
@@ -648,6 +649,7 @@ def main():
                     prev_fusion_roi = "over_left_shoulder"
                     prev_fusion_roi_point = "over_left_shoulder"
                     prev_fusion_roi_mahal = "over_left_shoulder"
+            # print("prev fusion after: ", prev_fusion_roi)
 
         if roi_evaluator is not None:
             fused_gaze_result = {
