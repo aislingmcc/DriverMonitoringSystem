@@ -621,23 +621,30 @@ def main():
 
             cv2.imshow(f"Camera {cam_indices[i]} - Press 'q' to terminate", frame)
 
-        # print("prev fusion before: ", prev_fusion_roi)
         # compute fusion result (angle+magnitude, point cluster, and mahalanobis)
         selected = camera_priority_selector.select_cameras(gaze_results_current, head_poses_current)
-        if selected is not None:
-            selected_camera_list.append(selected+1)
+        if selected is not None and 0 <= selected < len(cam_indices):
+            selected_camera_list.append(cam_indices[selected])
         prev_fusion_roi, angle_score, prev_fusion_roi_point, point_score, prev_fusion_roi_mahal= \
             multicam_roi_classifier.classify(gaze_results_current, selected=selected)
 
-        # Update live graph
-        if live_graph is not None:
-            live_graph.add_data_point(current_time=t_now,angle_score=angle_score,camera_idx=selected)
+        # when extreme yaw values are detected
+        if selected is not None and head_poses_current[selected] is not None:
+            _, _, yaw = head_poses_current[selected]
+            if yaw is not None and abs(yaw) > 45:
+                if yaw > 0:
+                    prev_fusion_roi = "over_right_shoulder"
+                    prev_fusion_roi_point = "over_right_shoulder"
+                    prev_fusion_roi_mahal = "over_right_shoulder"
+                else:
+                    prev_fusion_roi = "over_left_shoulder"
+                    prev_fusion_roi_point = "over_left_shoulder"
+                    prev_fusion_roi_mahal = "over_left_shoulder"
 
         # when not facial landmarks are detected
         if no_gaze_present:
             # use last valid yaw from any camera
             valid_yaws = [(i, yaw) for i, yaw in enumerate(last_yaw_current) if yaw is not None]
-            # print(valid_yaws)
             if valid_yaws:
                 cam_idx, last_yaw = max(valid_yaws, key=lambda x: abs(x[1]))
                 # Positive yaw =? looking over right shoulder, Negative yaw => looking over left shoulder
@@ -649,7 +656,10 @@ def main():
                     prev_fusion_roi = "over_left_shoulder"
                     prev_fusion_roi_point = "over_left_shoulder"
                     prev_fusion_roi_mahal = "over_left_shoulder"
-            # print("prev fusion after: ", prev_fusion_roi)
+
+               # Update live graph
+        if live_graph is not None:
+            live_graph.add_data_point(current_time=t_now,angle_score=angle_score,camera_idx=selected)
 
         if roi_evaluator is not None:
             fused_gaze_result = {

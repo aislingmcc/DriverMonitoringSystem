@@ -25,45 +25,23 @@ def vec_jitter_std(vecs):
     ]
     return float(np.std(diffs))
 
-import numpy as np
-
-def _history_to_array(history):
-    if history is None or len(history) == 0:
-        return None
-    arr = np.asarray(history, dtype=np.float32)
-    if arr.ndim == 1:
-        arr = arr.reshape(1, -1)
-    return arr
-
-
 def hampel_filter_final_vector(current_vec, history, n_sigma=3.0, min_history=5):
-    current_vec = np.asarray(current_vec, dtype=np.float32)
-    hist = _history_to_array(history)
+    if history is None or len(history) < min_history:
+        return current_vec
 
-    if hist is None or len(hist) < min_history:
-        return current_vec, False, current_vec, 0.0, np.inf
-
-    # Robust center from recent final gaze vectors
-    center_vec = np.median(hist, axis=0).astype(np.float32)
-
-    # Distance of each history sample from the center
-    dists = np.linalg.norm(hist - center_vec, axis=1)
-
-    med_dist = np.median(dists)
-    mad = np.median(np.abs(dists - med_dist))
-
+    center_vec = np.median(history, axis=0).astype(np.float32).reshape(-1)
     current_dist = np.linalg.norm(current_vec - center_vec)
 
-    if mad < 1e-8:
-        threshold = med_dist + 1e-3
-    else:
-        robust_sigma = 1.4826 * mad
-        threshold = med_dist + n_sigma * robust_sigma
+    dists = np.linalg.norm(history - center_vec, axis=1)
+    med_dist = np.median(dists)
+    mad = np.median(np.abs(dists - med_dist))
+    threshold = med_dist + n_sigma * 1.4826 * mad
 
     is_outlier = current_dist > threshold
     filtered_vec = center_vec if is_outlier else current_vec
 
-    return filtered_vec, is_outlier, center_vec, current_dist, threshold
+    return filtered_vec.reshape(-1)
+
 
 def select_reliable_eye(left_history, right_history, left_vec, right_vec, 
                        iris_points, gp_adj,std_threshold=5.0, ratio_threshold=2.0):
@@ -75,43 +53,43 @@ def select_reliable_eye(left_history, right_history, left_vec, right_vec,
         eye_used = "right"
         gaze_vec = right_vec
         gaze_point = gp_adj[1]
+        iris_point = iris_points[1]
         final_gaze_history = right_history
 
     elif right_std > left_std * ratio_threshold and right_std > std_threshold:
         eye_used = "left"
         gaze_vec = left_vec
         gaze_point = gp_adj[0]
+        iris_point = iris_points[0]
         final_gaze_history = left_history
 
     else:
         eye_used = "blend"
-        # ensure float dtype before normalization to avoid casting errors
         gaze_vec = (left_vec + right_vec).astype(np.float32, copy=False)
-        norm = np.linalg.norm(gaze_vec) + 1e-8
-        gaze_vec = gaze_vec / norm
+        gaze_vec = 0.5 * (left_vec+right_vec)
         gaze_point = 0.5 * (gp_adj[0] + gp_adj[1])
-        final_gaze_history=combine_histories(left_history,right_history)
-    
-    hampel_n_sigma = 3
-    hampel_min_history=5
+        iris_point = 0.5 * (iris_points[0]+iris_points[1])
+        final_gaze_history= combine_histories(left_history,right_history)
 
-    gaze_vector, is_outlier, center_vec, current_dist, threshold = hampel_filter_final_vector(gaze_vec,
-                                                    final_gaze_history,
-                                                    n_sigma=hampel_n_sigma,
-                                                    min_history=hampel_min_history
-                                                )
-
-
+    gaze_vector = hampel_filter_final_vector(gaze_vec,final_gaze_history,n_sigma=2,min_history=3)
+    gaze_pointt = hampel_adjusted_point(gaze_vector, iris_point)
     angle = angle_from_vector(gaze_vector)
+    # if not np.allclose(gaze_point, gaze_pointt):
+    #     print(time.time())
+    #     print("gaze vector before:", gaze_vec)
+    #     print("gaze vector after:", gaze_vector)
 
-    return eye_used, gaze_point, angle
+    return eye_used, gaze_pointt, angle
+
+def hampel_adjusted_point(gaze_vector, iris_points):
+    adjusted_points = []
+    for i in range(len(gaze_vector)):
+        end_pt = iris_points[i] + gaze_vector[i]
+        adjusted_points.append(end_pt)
+    return adjusted_points
+
 
 def combine_histories(left_history, right_history):
-    if len(left_history) == 0:
-        return list(right_history)
-    if len(right_history) == 0:
-        return list(left_history)
-
     n = min(len(left_history), len(right_history))
     left_arr = np.asarray(left_history[-n:], dtype=np.float32)
     right_arr = np.asarray(right_history[-n:], dtype=np.float32)
@@ -507,7 +485,7 @@ class CameraPrioritySelector:
 
         buffer = 0.05  # minimum score difference to switch cameras
         score0 = scores[0]
-        score1 = scores[1] * 1.5
+        score1 = scores[1] #* 1.5
 
         diff = score0 - score1
 
