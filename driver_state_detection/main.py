@@ -114,13 +114,13 @@ def run_calibration(args, camera_matrix, dist_coeffs):
                         left_vec = gaze_result.get("left_vec", None)
                         right_vec = gaze_result.get("right_vec", None)
 
-                        # Update calibration current frame data (pass gaze_points_adj and eye vectors for proper calibration)
+                        # Update calibration current frame data (pass gaze_points_adj, yaw and eye vectors for proper calibration)
                         is_complete = calib_mgrs[i].update(mid_ang, left_mag, right_mag, gaze_points_adj=gp_adj, 
-                                                           left_vec=left_vec, right_vec=right_vec, ear_score=ear)
+                                                           left_vec=left_vec, right_vec=right_vec, ear_score=ear, yaw=yaw)
 
             else:
                 # No face detected still call update for synchronized time with audio
-                is_complete = calib_mgrs[i].update(None, None, None, gaze_points_adj=None, left_vec=None, right_vec=None, ear_score=None)
+                is_complete = calib_mgrs[i].update(None, None, None, gaze_points_adj=None, left_vec=None, right_vec=None, ear_score=None, yaw=None)
 
             if is_complete:
                 all_complete[i] = True
@@ -166,14 +166,19 @@ def run_calibration(args, camera_matrix, dist_coeffs):
         calibrated_rois = calib_mgr.get_calibration_rois()
         if calibrated_rois:
             print(f"\n=== CALIBRATION COMPLETE - Camera {cam_indices[i]} ===")
-            print("Calibrated ROI angles and magnitudes:")
+            print("Calibrated ROI data:")
             for roi_name, data in calibrated_rois.items():
-                print(
-                    f"  {roi_name}: angle={data['angle']:.1f}°, "
-                    f"left_mag={data['left_mag']:.4f}, right_mag={data['right_mag']:.4f}"
-                )
-                if data['angle_std'] > 30:
-                    print(f" WARNING: High variability of {roi_name} calibration: std={data['angle_std']:.1f}")
+                if 'angle' in data:
+                    print(
+                        f"  {roi_name}: angle={data['angle']:.1f}°, "
+                        f"left_mag={data['left_mag']:.4f}, right_mag={data['right_mag']:.4f}"
+                    )
+                    if data.get('angle_std', 0.0) > 30:
+                        print(f" WARNING: High variability of {roi_name} calibration: std={data['angle_std']:.1f}")
+                elif 'yaw_avg' in data:
+                    print(f"  {roi_name}: yaw_avg={data['yaw_avg']}")
+                else:
+                    print(f"  {roi_name}: (no detailed calibration angle data)")
             
             calibrated_rois_list.append(calibrated_rois)
         else:
@@ -217,10 +222,19 @@ def load_calibration(calibration_files):
                 data = json.load(f)
             print(f"Loaded calibration from {calib_file}")
             for roi_name, roi_data in data.items():
-                print(
-                    f"  {roi_name}: angle={roi_data['angle']:.1f}°, "
-                    f"left_mag={roi_data['left_mag']:.4f}, right_mag={roi_data['right_mag']:.4f}"
-                )
+                if 'angle' in roi_data:
+                    angle_val = roi_data.get('angle')
+                    left_mag_val = roi_data.get('left_mag')
+                    right_mag_val = roi_data.get('right_mag')
+                    if angle_val is not None and left_mag_val is not None and right_mag_val is not None:
+                        print(
+                            f"  {roi_name}: angle={angle_val:.1f}°, "
+                            f"left_mag={left_mag_val:.4f}, right_mag={right_mag_val:.4f}"
+                        )
+                elif 'yaw_avg' in roi_data:
+                    yaw_val = roi_data.get('yaw_avg')
+                    if yaw_val is not None:
+                        print(f"  {roi_name}: yaw_avg={yaw_val:.1f}°")
             calibrated_rois_list.append(data)
         except FileNotFoundError:
             print(f"Calibration file not found: {calib_file}")
@@ -348,17 +362,20 @@ def main():
 
     live_graph = None
     return_graph = getattr(args, "return_graph", False)
-    if getattr(args, "live_graph", False) or return_graph:
-        # If return_graph is enabled, keep the full history 
+    roi_graph = getattr(args, "roi_graph", False)
+    live_graph_enabled = getattr(args, "live_graph", False)
+    if live_graph_enabled or roi_graph or return_graph:
+        # keep history 
         history_duration = getattr(args, "live_graph_history", 60)
         normalise = getattr(args, "live_graph_normalise", False)
         
         live_graph = ROILiveGraph(
             history_duration=history_duration,
             roi_list=calibrated_rois_list,
-            normalise=normalise
+            normalise=normalise,
+            plot_mode="roi" if roi_graph else "scalar",
         )
-        if getattr(args, "live_graph", False):
+        if live_graph_enabled and not roi_graph:
             live_graph.start()
     # Create AttentionScorer instances
     scorers = []
@@ -425,6 +442,7 @@ def main():
         elapsed_time = t_now - prev_time
         prev_time = t_now
         no_gaze_present=True
+        also_no_gaze_present=True
         if elapsed_time > 0:
             fps = np.round(1 / elapsed_time, 3)
 
@@ -518,7 +536,7 @@ def main():
                 iy = (iris_points[0][1] + iris_points[1][1]) / 2.0
                 start = (int(ix), int(iy))
                 end = (int(gp_adj[0]), int(gp_adj[1]))
-                cv2.arrowedLine(frame, start, end, (255, 0, 255), 2, tipLength=0.2)
+                # cv2.arrowedLine(frame, start, end, (0, 255, 0), 2, tipLength=0.2)
 
                 # Display previous frame inf
                 left_vec = gaze_result["left_vec"]
@@ -555,25 +573,30 @@ def main():
             if frame_det is not None:
                 frame = frame_det
 
-            if ear is not None:
-                cv2.putText(frame, "EAR:" + str(round(ear, 3)), (10, 50), cv2.FONT_HERSHEY_PLAIN, 2, (155, 255, 22), 1, cv2.LINE_AA)
+            # if ear is not None:
+            #     cv2.putText(frame, "EAR:" + str(round(ear, 3)), (10, 50), cv2.FONT_HERSHEY_PLAIN, 2, (155, 255, 22), 1, cv2.LINE_AA)
             if gaze is not None:
-                cv2.putText(frame, "Gaze Score:" + str(round(gaze, 3)), (10, 80), cv2.FONT_HERSHEY_PLAIN, 2, (155, 255, 22), 1, cv2.LINE_AA)
-                cv2.putText(frame, "PERCLOS:" + str(round(perclos_score, 3)), (10, 110), cv2.FONT_HERSHEY_PLAIN, 2, (155, 255, 22), 1, cv2.LINE_AA)
+                # cv2.putText(frame, "Gaze Score:" + str(round(gaze, 3)), (10, 80), cv2.FONT_HERSHEY_PLAIN, 2, (155, 255, 22), 1, cv2.LINE_AA)
+                # cv2.putText(frame, "PERCLOS:" + str(round(perclos_score, 3)), (10, 110), cv2.FONT_HERSHEY_PLAIN, 2, (155, 255, 22), 1, cv2.LINE_AA)
+                if not no_gaze_present:
+                    also_no_gaze_present=False
                 no_gaze_present=False
 
-            if roll is not None:
-                cv2.putText(frame, "roll:" + str(roll.round(1)[0]), (450, 40), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
-            if pitch is not None:
-                cv2.putText(frame, "pitch:" + str(pitch.round(1)[0]), (450, 70), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
-            if yaw is not None:
-                cv2.putText(frame, "yaw:" + str(yaw.round(1)[0]), (450, 100), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
+            # if roll is not None:
+            #     cv2.putText(frame, "roll:" + str(roll.round(1)[0]), (450, 40), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
+            # if pitch is not None:
+            #     cv2.putText(frame, "pitch:" + str(pitch.round(1)[0]), (450, 70), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
+            # if yaw is not None:
+            #     cv2.putText(frame, "yaw:" + str(yaw.round(1)[0]), (450, 100), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
 
             # Display previous frame info   
             if prev_fusion_roi is not None:
-                cv2.putText(frame, f"Point ROI: {prev_fusion_roi_point}", (10, 350), cv2.FONT_HERSHEY_PLAIN, 2, (0,255,0), 2)
-                cv2.putText(frame, f"Angle ROI: {prev_fusion_roi}", (10, 320), cv2.FONT_HERSHEY_PLAIN, 2, (0,255,0), 2)
-                cv2.putText(frame, f"Mahalanobis ROI: {prev_fusion_roi_mahal}", (10, 380), cv2.FONT_HERSHEY_PLAIN, 2, (0,255,0), 2)
+                # cv2.putText(frame, f"Looking at {prev_fusion_roi_point}", (10, 350), cv2.FONT_HERSHEY_PLAIN, 3, (0,255,0), 3)
+                # cv2.putText(frame, f"Angle ROI: {prev_fusion_roi}", (10, 320), cv2.FONT_HERSHEY_PLAIN, 2, (0,255,0), 2)
+                # cv2.putText(frame, f"Mahalanobis ROI: {prev_fusion_roi_mahal}", (10, 380), cv2.FONT_HERSHEY_PLAIN, 2, (0,255,0), 2)
+                cv2.rectangle(frame, (0, 480), (640, 410), (240, 240, 240), -1)
+                cv2.rectangle(frame, (1, 478), (638, 411), (170, 170, 240), 3)
+                cv2.putText(frame, f"Focus: {prev_fusion_roi_point}", (10, 465), cv2.FONT_HERSHEY_PLAIN, 3, (0,0,255), 3)
 
             # if tired:
             #     cv2.putText(frame, "TIRED!", (10, 280), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
@@ -605,10 +628,10 @@ def main():
             dt_local = now_local - prev_time_per_cam[i]
             prev_time_per_cam[i] = now_local
             fps_local = (np.round(1 / dt_local, 3) if dt_local > 0 else 0.0)
-            if args.show_fps:
-                cv2.putText(frame, "FPS:" + str(round(fps_local)), (10, 400), cv2.FONT_HERSHEY_PLAIN, 2, (255, 0, 255), 1)
-            if args.show_proc_time:
-                cv2.putText(frame, "PROC. TIME FRAME:" + str(round(proc_time_frame_ms, 0)) + "ms", (10, 430), cv2.FONT_HERSHEY_PLAIN, 2, (255, 0, 255), 1)
+            # if args.show_fps:
+            #     cv2.putText(frame, "FPS:" + str(round(fps_local)), (10, 400), cv2.FONT_HERSHEY_PLAIN, 2, (255, 0, 255), 1)
+            # if args.show_proc_time:
+            #     cv2.putText(frame, "PROC. TIME FRAME:" + str(round(proc_time_frame_ms, 0)) + "ms", (10, 430), cv2.FONT_HERSHEY_PLAIN, 2, (255, 0, 255), 1)
 
             frame_count += 1
             # record final displayed 
@@ -629,20 +652,25 @@ def main():
             multicam_roi_classifier.classify(gaze_results_current, selected=selected)
 
         # when extreme yaw values are detected
-        if selected is not None and head_poses_current[selected] is not None:
+        if selected is not None and head_poses_current[selected] is not None and no_gaze_present:
             _, _, yaw = head_poses_current[selected]
-            if yaw is not None and abs(yaw) > 45:
-                if yaw > 0:
+            if calibrated_rois_list is not None and calibrated_rois_list[selected] is not None:
+                cam_calibrated_rois = calibrated_rois_list[selected]
+                right_yaw = cam_calibrated_rois.get("over_right_shoulder", {}).get("yaw_avg", 55.0)
+                left_yaw = cam_calibrated_rois.get("over_left_shoulder", {}).get("yaw_avg", -55.0)
+                right_yaw = 55.0 if right_yaw is None else float(right_yaw)
+                left_yaw = -55.0 if left_yaw is None else float(left_yaw)
+                if yaw > right_yaw-10:
                     prev_fusion_roi = "over_right_shoulder"
                     prev_fusion_roi_point = "over_right_shoulder"
                     prev_fusion_roi_mahal = "over_right_shoulder"
-                else:
+                elif yaw > left_yaw+15:
                     prev_fusion_roi = "over_left_shoulder"
                     prev_fusion_roi_point = "over_left_shoulder"
                     prev_fusion_roi_mahal = "over_left_shoulder"
 
         # when not facial landmarks are detected
-        if no_gaze_present:
+        if also_no_gaze_present and no_gaze_present:
             # use last valid yaw from any camera
             valid_yaws = [(i, yaw) for i, yaw in enumerate(last_yaw_current) if yaw is not None]
             if valid_yaws:
@@ -659,7 +687,12 @@ def main():
 
                # Update live graph
         if live_graph is not None:
-            live_graph.add_data_point(current_time=t_now,angle_score=angle_score,camera_idx=selected)
+            live_graph.add_data_point(
+                current_time=t_now,
+                angle_score=angle_score,
+                camera_idx=selected,
+                roi_label=prev_fusion_roi_point,
+            )
 
         if roi_evaluator is not None:
             fused_gaze_result = {
@@ -725,7 +758,7 @@ def main():
 
     # Cleanup and display live graph
     if live_graph is not None:
-        if getattr(args, "return_graph", False):
+        if getattr(args, "return_graph", False) or getattr(args, "roi_graph", False):
             live_graph.show_full()
         else:
             live_graph.stop()

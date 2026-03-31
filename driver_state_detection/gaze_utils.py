@@ -42,7 +42,6 @@ def hampel_filter_final_vector(current_vec, history, n_sigma=3.0, min_history=5)
 
     return filtered_vec.reshape(-1)
 
-
 def select_reliable_eye(left_history, right_history, left_vec, right_vec, 
                        iris_points, gp_adj,std_threshold=5.0, ratio_threshold=2.0):
 
@@ -74,11 +73,6 @@ def select_reliable_eye(left_history, right_history, left_vec, right_vec,
     gaze_vector = hampel_filter_final_vector(gaze_vec,final_gaze_history,n_sigma=2,min_history=3)
     gaze_pointt = hampel_adjusted_point(gaze_vector, iris_point)
     angle = angle_from_vector(gaze_vector)
-    # if not np.allclose(gaze_point, gaze_pointt):
-    #     print(time.time())
-    #     print("gaze vector before:", gaze_vec)
-    #     print("gaze vector after:", gaze_vector)
-
     return eye_used, gaze_pointt, angle
 
 def hampel_adjusted_point(gaze_vector, iris_points):
@@ -101,7 +95,6 @@ def classify_by_angle_magnitude(gaze_angle, gaze_magnitude, angle_close_thresh=5
     if gaze_angle is None:
         return "none", 0.0
 
-    gaze_angle = np.asarray(gaze_angle, dtype=np.float32)
     gaze_magnitude = np.asarray(gaze_magnitude, dtype=np.float32)
 
     # Use calibrated ROIs if provided, otherwise use defaults
@@ -113,7 +106,13 @@ def classify_by_angle_magnitude(gaze_angle, gaze_magnitude, angle_close_thresh=5
     left_mag = gaze_magnitude[0]
     right_mag = gaze_magnitude[1]
     
-    angle_dists = {roi: circular_angle_diff(gaze_angle, info["angle"]) for roi, info in ROIs.items()}
+    angle_dists = {}
+    for roi, info in ROIs.items():
+        if roi == "over_left_shoulder" or roi == "over_right_shoulder":
+            continue
+        if "angle" in info:
+            angle_dists[roi] = circular_angle_diff(gaze_angle, info["angle"])
+
     top3 = sorted(angle_dists.items(), key=lambda kv: kv[1])[:3]
 
     _, best_angle = top3[0]
@@ -219,10 +218,10 @@ def classify_by_corner(gaze_points, iris_points):
     return corner_names[angle_to_corner_idx(gaze_points)], gaze_points
 
 
-def apply_headpose_adjustment(gaze_points, iris_points, pitch, yaw, yaw_gain=0.005, pitch_gain=0.005):
+def apply_headpose_adjustment(gaze_points, iris_points, pitch, yaw, yaw_gain=2, pitch_gain=2):
     """
-    Adjust gaze endpoints using head pose. Inputs are in normalized coords (0..1).
-    Returns adjusted endpoints or None if inputs invalid.
+    Adjust gaze endpoints using head pose
+    Returns adjusted endpoints or None if inputs invalid
     """
     if gaze_points is None or iris_points is None:
         return None
@@ -234,7 +233,7 @@ def apply_headpose_adjustment(gaze_points, iris_points, pitch, yaw, yaw_gain=0.0
     adjusted_endpoints = []
     for i in range(len(gaze_points)):
         gaze_vec = gaze_points[i] - iris_points[i]
-        gaze_vec_adj = gaze_vec #+ np.array([0, 0], dtype=np.float32)#yaw_val * yaw_gain#pitch_val * pitch_gain
+        gaze_vec_adj = gaze_vec #+ np.array([yaw_val * yaw_gain, pitch_val * pitch_gain], dtype=np.float32)##yaw_val * yaw_gain#pitch_val * pitch_gain
         end_pt = iris_points[i] + gaze_vec_adj
         adjusted_endpoints.append(end_pt)
 

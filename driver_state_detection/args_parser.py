@@ -243,6 +243,12 @@ def get_args():
     )
 
     parser.add_argument(
+        "--roi_graph",
+        action="store_true",
+        help="Show a final categorical ROI graph that plots the predicted ROI label directly over time.",
+    )
+
+    parser.add_argument(
         "--return_graph",
         action="store_true",
         help="Show a final graph of all collected ROI classification data (with ROI reference lines) after recording, even if --live_graph is not enabled.",

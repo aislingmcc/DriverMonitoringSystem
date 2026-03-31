@@ -9,9 +9,7 @@ class Calibration:
     def __init__(self, roi_duration= 4.0, transition_duration= 2.0, audio_file=None, ear_thresh=0.2):
         self.roi_duration = roi_duration
         self.transition_duration = transition_duration
-        # Keep calibration ROIs to the camera-calibrated set only.
-        # Shoulder ROIs are handled separately and are NOT part of calibration.
-        self.roi_names = ["left_mirror", "right_mirror", "road", "rearmirror", "left_window", "right_window"]
+        self.roi_names = ["left_mirror", "right_mirror","over_left_shoulder", "road", "over_right_shoulder", "rearmirror", "left_window", "right_window"]
         self.roi_index = 0
         self.calibration_data = {}
         self.in_transition = False
@@ -20,6 +18,7 @@ class Calibration:
         self.current_left_mags = []
         self.current_right_mags = []
         self.current_gaze_points = []
+        self.current_yaws = []
         self.audio_player = None
         self.audio_file = audio_file
         self.ear_thresh = ear_thresh
@@ -36,8 +35,8 @@ class Calibration:
             self.audio_player = AudioPlayer(self.audio_file)
             self.audio_player.play()
 
-    def update(self, mid_ang, left_mag, right_mag, gaze_points_adj= None, 
-               left_vec = None, right_vec = None, ear_score=None):
+    def update(self, mid_ang, left_mag, right_mag, gaze_points_adj=None, 
+               left_vec=None, right_vec=None, ear_score=None, yaw=None):
         
         """
         Update calibration with gaze info
@@ -60,6 +59,7 @@ class Calibration:
                 self.current_left_mags = []
                 self.current_right_mags = []
                 self.current_gaze_points = []
+                self.current_yaws = []
             return False
 
         # Only collect data if eyes are open 
@@ -69,29 +69,50 @@ class Calibration:
             self.current_left_mags.append(left_mag)
             self.current_right_mags.append(right_mag)
             self.current_gaze_points.append(gaze_points_adj)
+            if yaw is not None:
+                self.current_yaws.append(float(yaw))
             
         # record roi data
         if elapsed >= self.roi_duration:
             roi_name = self.roi_names[self.roi_index]
             
-            roi_data = {"angle": float(np.median(self.current_mid_angles)) if len(self.current_mid_angles) > 0 else 0.0,
-                        "left_mag": float(np.median(self.current_left_mags)) if len(self.current_left_mags) > 0 else 0.0,
-                        "right_mag": float(np.median(self.current_right_mags)) if len(self.current_right_mags) > 0 else 0.0,
-                        "angle_std": float(np.std(self.current_mid_angles)) if len(self.current_mid_angles) > 0 else 0.0}
+            if roi_name in ["over_left_shoulder", "over_right_shoulder"]:
+                roi_data = {}
+            else:
+                roi_data = {"angle": float(np.median(self.current_mid_angles)) if len(self.current_mid_angles) > 0 else 0.0,
+                            "left_mag": float(np.median(self.current_left_mags)) if len(self.current_left_mags) > 0 else 0.0,
+                            "right_mag": float(np.median(self.current_right_mags)) if len(self.current_right_mags) > 0 else 0.0,
+                            "angle_std": float(np.std(self.current_mid_angles)) if len(self.current_mid_angles) > 0 else 0.0}
             
-            # Calculate centroid of gaze points 
-            if len(self.current_gaze_points) >= 1:
-                gaze_points_array = np.asarray(self.current_gaze_points, dtype=np.float32)
-                centroid_x = float(np.median(gaze_points_array[:, 0]))
-                centroid_y = float(np.median(gaze_points_array[:, 1]))
-                # print(f"Centroid for {roi_name}: ({centroid_x}, {centroid_y})")
-                roi_data["centroid_x"] = centroid_x
-                roi_data["centroid_y"] = centroid_y
+            # yaw calibration values
+            if roi_name in ["over_left_shoulder", "over_right_shoulder"]:
+                if len(self.current_yaws) > 0:
+                    yaw_array = np.asarray(self.current_yaws, dtype=np.float32)
+                    roi_data = {"yaw_avg": float(np.mean(yaw_array))}
+                else:
+                    roi_data = {"yaw_avg": None}
+            else:
+                if len(self.current_yaws) > 0:
+                    yaw_array = np.asarray(self.current_yaws, dtype=np.float32)
+                    roi_data["yaw_q1"] = float(np.percentile(yaw_array, 25))
+                    roi_data["yaw_q3"] = float(np.percentile(yaw_array, 75))
+                else:
+                    roi_data["yaw_q1"] = None
+                    roi_data["yaw_q3"] = None
 
-                # Compute covariance matrix
-                if len(gaze_points_array) >= 2:
-                    cov_matrix = np.cov(gaze_points_array.T)
-                    roi_data["mahal_cov"] = cov_matrix.tolist()
+                # Calculate centroid of gaze points 
+                if len(self.current_gaze_points) >= 1:
+                    gaze_points_array = np.asarray(self.current_gaze_points, dtype=np.float32)
+                    centroid_x = float(np.median(gaze_points_array[:, 0]))
+                    centroid_y = float(np.median(gaze_points_array[:, 1]))
+                    # print(f"Centroid for {roi_name}: ({centroid_x}, {centroid_y})")
+                    roi_data["centroid_x"] = centroid_x
+                    roi_data["centroid_y"] = centroid_y
+
+                    # Compute covariance matrix
+                    if len(gaze_points_array) >= 2:
+                        cov_matrix = np.cov(gaze_points_array.T)
+                        roi_data["mahal_cov"] = cov_matrix.tolist()
 
             self.calibration_data[roi_name] = roi_data
 
