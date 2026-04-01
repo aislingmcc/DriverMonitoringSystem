@@ -254,8 +254,7 @@ class GazeLogger:
         self._mag_left = []
         self._gaze_points_x = []
         self._gaze_points_y = []
-        self._roi_labels = []  
-        # self._camera_indices = []  
+        self._roi_labels = []   
 
     def log(self, left_ang, right_ang, mid_ang, left_mag, right_mag, time, gaze_points_adj = None, roi_label = None):
         if not self.angles and not self.scatter:
@@ -267,6 +266,7 @@ class GazeLogger:
             self._mid.append(mid_ang)
             self._mag_left.append(left_mag)
             self._mag_right.append(right_mag)
+        
         if self.scatter and gaze_points_adj is not None:
             # Extract x, y coordinates from gaze points
             gaze_points_adj = np.asarray(gaze_points_adj, dtype=np.float32)
@@ -274,7 +274,6 @@ class GazeLogger:
             self._gaze_points_y.append(gaze_points_adj[1])
             # Extract ROIs and camera indices
             self._roi_labels.append(roi_label if roi_label is not None else "none")
-            # self._camera_indices.append(camera_idx if camera_idx is not None else -1)
 
     def to_numpy(self):
         t= np.asarray(self._t, dtype=float)
@@ -294,9 +293,9 @@ class GazeLogger:
         print(f"\n=== Gaze Angle Summary (Camera {cam_index}) ===")
         print(f"Samples: {len(t)}")
         print(f"Time range: {t[0]:.2f}s -> {t[-1]:.2f}s")
-        print(f"Left Eye: mean:{np.mean(L):.2f}°, std:{np.std(L):.2f}°")
-        print(f"Right Eye: mean:{np.mean(R):.2f}°, std:{np.std(R):.2f}°")
-        print(f"Midpoint: mean:{np.mean(M):.2f}°, std:{np.std(M):.2f}°")
+        print(f"Left Eye: mean:{np.mean(L):.2f}, std:{np.std(L):.2f}")
+        print(f"Right Eye: mean:{np.mean(R):.2f}, std:{np.std(R):.2f}")
+        print(f"Midpoint: mean:{np.mean(M):.2f}, std:{np.std(M):.2f}")
         print(f"Gaze Magnitude Left Eye: mean:{np.mean(self._mag_left):.4f}, std:{np.std(self._mag_left):.4f}")
         print(f"Gaze Magnitude Right Eye: mean:{np.mean(self._mag_right):.4f}, std:{np.std(self._mag_right):.4f}")
 

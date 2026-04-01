@@ -17,7 +17,9 @@ class ROILiveGraph:
         self.normalised = normalise
         self.plot_mode = plot_mode
         self.current_camera_idx = None
-        self.roi_names = ["left_mirror", "right_mirror", "road", "rearmirror", "left_window","right_window", "over_left_shoulder", "over_right_shoulder", "none"]
+        # self.roi_names = ["left_mirror", "right_mirror", "road", "rearmirror", "left_window","right_window", "over_left_shoulder", "over_right_shoulder", "none"]
+        self.roi_names = ["over_left_shoulder", "left_window", "left_mirror",  "rearmirror", "road","right_mirror", "right_window",  "over_right_shoulder", "none"]
+        
         self.roi_colours = {"left_mirror": "pink",
                             "right_mirror": "lime", 
                             "road": "magenta",

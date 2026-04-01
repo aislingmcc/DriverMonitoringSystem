@@ -441,8 +441,8 @@ def main():
         t_now = time.perf_counter()
         elapsed_time = t_now - prev_time
         prev_time = t_now
-        no_gaze_present=True
-        also_no_gaze_present=True
+        no_gaze_present=False
+        also_no_gaze_present=False
         if elapsed_time > 0:
             fps = np.round(1 / elapsed_time, 3)
 
@@ -479,6 +479,10 @@ def main():
             frame_size = frame.shape[1], frame.shape[0]
 
             lms = detectors[i].process(rgb).multi_face_landmarks
+            if lms is None:
+                if no_gaze_present:
+                    also_no_gaze_present=True
+                no_gaze_present=True
 
             # initialise variables
             landmarks = None
@@ -575,19 +579,16 @@ def main():
 
             # if ear is not None:
             #     cv2.putText(frame, "EAR:" + str(round(ear, 3)), (10, 50), cv2.FONT_HERSHEY_PLAIN, 2, (155, 255, 22), 1, cv2.LINE_AA)
-            if gaze is not None:
+            # if gaze is not None:
                 # cv2.putText(frame, "Gaze Score:" + str(round(gaze, 3)), (10, 80), cv2.FONT_HERSHEY_PLAIN, 2, (155, 255, 22), 1, cv2.LINE_AA)
                 # cv2.putText(frame, "PERCLOS:" + str(round(perclos_score, 3)), (10, 110), cv2.FONT_HERSHEY_PLAIN, 2, (155, 255, 22), 1, cv2.LINE_AA)
-                if not no_gaze_present:
-                    also_no_gaze_present=False
-                no_gaze_present=False
 
-            # if roll is not None:
-            #     cv2.putText(frame, "roll:" + str(roll.round(1)[0]), (450, 40), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
-            # if pitch is not None:
-            #     cv2.putText(frame, "pitch:" + str(pitch.round(1)[0]), (450, 70), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
-            # if yaw is not None:
-            #     cv2.putText(frame, "yaw:" + str(yaw.round(1)[0]), (450, 100), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
+            if roll is not None:
+                cv2.putText(frame, "roll:" + str(roll.round(1)[0]), (450, 40), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
+            if pitch is not None:
+                cv2.putText(frame, "pitch:" + str(pitch.round(1)[0]), (450, 70), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
+            if yaw is not None:
+                cv2.putText(frame, "yaw:" + str(yaw.round(1)[0]), (450, 100), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
 
             # Display previous frame info   
             if prev_fusion_roi is not None:
@@ -650,21 +651,23 @@ def main():
             selected_camera_list.append(cam_indices[selected])
         prev_fusion_roi, angle_score, prev_fusion_roi_point, point_score, prev_fusion_roi_mahal= \
             multicam_roi_classifier.classify(gaze_results_current, selected=selected)
-
-        # when extreme yaw values are detected
+        
+        # when extreme yaw values are detected 
         if selected is not None and head_poses_current[selected] is not None and no_gaze_present:
             _, _, yaw = head_poses_current[selected]
             if calibrated_rois_list is not None and calibrated_rois_list[selected] is not None:
                 cam_calibrated_rois = calibrated_rois_list[selected]
-                right_yaw = cam_calibrated_rois.get("over_right_shoulder", {}).get("yaw_avg", 55.0)
-                left_yaw = cam_calibrated_rois.get("over_left_shoulder", {}).get("yaw_avg", -55.0)
-                right_yaw = 55.0 if right_yaw is None else float(right_yaw)
-                left_yaw = -55.0 if left_yaw is None else float(left_yaw)
-                if yaw > right_yaw-10:
+                right_yaw = cam_calibrated_rois.get("over_right_shoulder", {}).get("yaw_avg", 60.0)
+                left_yaw = cam_calibrated_rois.get("over_left_shoulder", {}).get("yaw_avg", -60.0)
+                right_yaw = 60.0 if right_yaw is None else float(right_yaw)
+                left_yaw = -60.0 if left_yaw is None else float(left_yaw)
+                right_yaw = right_yaw - 10
+                left_yaw = left_yaw + 10
+                if yaw > right_yaw:
                     prev_fusion_roi = "over_right_shoulder"
                     prev_fusion_roi_point = "over_right_shoulder"
                     prev_fusion_roi_mahal = "over_right_shoulder"
-                elif yaw > left_yaw+15:
+                elif yaw < left_yaw:
                     prev_fusion_roi = "over_left_shoulder"
                     prev_fusion_roi_point = "over_left_shoulder"
                     prev_fusion_roi_mahal = "over_left_shoulder"
@@ -687,12 +690,7 @@ def main():
 
                # Update live graph
         if live_graph is not None:
-            live_graph.add_data_point(
-                current_time=t_now,
-                angle_score=angle_score,
-                camera_idx=selected,
-                roi_label=prev_fusion_roi_point,
-            )
+            live_graph.add_data_point(current_time=t_now, angle_score=angle_score, camera_idx=selected, roi_label=prev_fusion_roi_point,)
 
         if roi_evaluator is not None:
             fused_gaze_result = {
