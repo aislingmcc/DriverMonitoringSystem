@@ -154,48 +154,26 @@ class EyeDetector:
         return eye_gaze_score, eye
     
     def get_Gaze_Vector(self, frame, landmarks, frame_size):
-        """
-        Computes vector that shows the direction of the gaze
-        This function calculates the gaze point for each eye and draws the gaze vector from the iris to the gaze point
-        """
-
-        # Use helper to compute per-eye gaze
+        # compute per-eye gaze
         def _compute_eye_gaze(frame, landmarks, eye_lms_nums, iris_num, frame_size):
-            """
-            Compute gaze and draw arrow for a single eye
-            """
             iris = landmarks[iris_num, :2]
             scale_px = np.array([frame_size[0], frame_size[1]])
             eye_center = self.get_eye_center(landmarks, eye_lms_nums)* scale_px
             iris_px = (iris * scale_px)
             gaze_vector = iris_px - eye_center
-            
-            # print("gaze vector ",gaze_vector)
-            # print(f"Gaze vector: {gaze_vector}")
-            # gaze_vector = (gaze_vector * scale_px).astype(np.int32)
 
-            # convert to pixels
-            # scale_px = np.array([frame_size[0], frame_size[1]])
-            # iris_px = (iris * scale_px)
-            # print(f"Iris position (pixels): {iris_px}")
-            # gaze_vector = (gaze_vector)
-
-            # gaze_magnitude = LA.norm(gaze_vector)*scale_px
             gaze_magnitude = np.sqrt(gaze_vector[0]**2 + gaze_vector[1]**2)
-            # print(f"Gaze magnitude: {gaze_magnitude}") # 2 array per eye
-
             gaze_point = iris_px + gaze_vector * gaze_magnitude *10 
-            # gaze_point_px = (gaze_point * scale_px).astype(np.int32)
 
             end = (int(gaze_point[0]), int(gaze_point[1]))
             start = (int(iris_px[0]), int(iris_px[1]))
 
             # drawing
-            if frame is not None:
-                try:
-                    cv2.arrowedLine(frame, start, end, (0,255,0), 2, tipLength=0.2)
-                except Exception:
-                    pass
+            # if frame is not None:
+            #     try:
+            #         cv2.arrowedLine(frame, start, end, (0,255,0), 2, tipLength=0.2)
+            #     except Exception:
+            #         pass
             # return gaze point and iris position 
             return gaze_point, iris_px, gaze_magnitude
 

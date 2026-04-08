@@ -540,7 +540,7 @@ def main():
                 iy = (iris_points[0][1] + iris_points[1][1]) / 2.0
                 start = (int(ix), int(iy))
                 end = (int(gp_adj[0]), int(gp_adj[1]))
-                # cv2.arrowedLine(frame, start, end, (0, 255, 0), 2, tipLength=0.2)
+                cv2.arrowedLine(frame, start, end, (0, 255, 0), 2, tipLength=0.2)
 
                 # Display previous frame inf
                 left_vec = gaze_result["left_vec"]
@@ -583,12 +583,12 @@ def main():
                 # cv2.putText(frame, "Gaze Score:" + str(round(gaze, 3)), (10, 80), cv2.FONT_HERSHEY_PLAIN, 2, (155, 255, 22), 1, cv2.LINE_AA)
                 # cv2.putText(frame, "PERCLOS:" + str(round(perclos_score, 3)), (10, 110), cv2.FONT_HERSHEY_PLAIN, 2, (155, 255, 22), 1, cv2.LINE_AA)
 
-            if roll is not None:
-                cv2.putText(frame, "roll:" + str(roll.round(1)[0]), (450, 40), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
-            if pitch is not None:
-                cv2.putText(frame, "pitch:" + str(pitch.round(1)[0]), (450, 70), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
-            if yaw is not None:
-                cv2.putText(frame, "yaw:" + str(yaw.round(1)[0]), (450, 100), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
+            # if roll is not None:
+            #     cv2.putText(frame, "roll:" + str(roll.round(1)[0]), (450, 40), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
+            # if pitch is not None:
+            #     cv2.putText(frame, "pitch:" + str(pitch.round(1)[0]), (450, 70), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
+            # if yaw is not None:
+            #     cv2.putText(frame, "yaw:" + str(yaw.round(1)[0]), (450, 100), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
 
             # Display previous frame info   
             if prev_fusion_roi is not None:

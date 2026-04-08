@@ -82,7 +82,6 @@ def hampel_adjusted_point(gaze_vector, iris_points):
         adjusted_points.append(end_pt)
     return adjusted_points
 
-
 def combine_histories(left_history, right_history):
     n = min(len(left_history), len(right_history))
     left_arr = np.asarray(left_history[-n:], dtype=np.float32)
@@ -97,7 +96,7 @@ def classify_by_angle_magnitude(gaze_angle, gaze_magnitude, angle_close_thresh=5
 
     gaze_magnitude = np.asarray(gaze_magnitude, dtype=np.float32)
 
-    # Use calibrated ROIs if provided, otherwise use defaults
+    # Use calibrated ROIs if provided 
     if calibrated_rois is None:
         return "none", 0.0
     
@@ -126,7 +125,7 @@ def classify_by_angle_magnitude(gaze_angle, gaze_magnitude, angle_close_thresh=5
 
     # Break tie using magnitude distance
     roi = min(candidates, key=lambda r: (abs(left_mag - ROIs[r]["left_mag"]) + abs(right_mag - ROIs[r]["right_mag"])))
-    return roi, (gaze_angle*.7+(gaze_magnitude[0]*+gaze_magnitude[1])*.3*360/40)
+    return roi, (gaze_angle * .7 + (gaze_magnitude[0] + gaze_magnitude[1]) * .3 * 360 / 40)
 
 def classify_by_point_cluster(gaze_points, calibrated_rois= None):
     if gaze_points is None:
@@ -487,7 +486,7 @@ class CameraPrioritySelector:
 
         diff = score0 - score1
 
-        # initialize to the highest-scoring camera on first frame
+        # initialise to the highest scoring camera on first frame
         if self.prev_selected is None:
             self.prev_selected = 0 if score0 >= score1 else 1
 
@@ -512,7 +511,6 @@ class MultiCameraROIClassifier:
 
     def classify(self, gaze_results_list, selected=None, method = None):
         # Filter to selected cameras if provided
-        # if selected is not None:
         if selected is None:
             return "none", 0.0, "none", 0.0, "none"
         result= gaze_results_list[selected]
